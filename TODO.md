@@ -6,6 +6,7 @@
 2. ~~**Chunk pattern detector** — IFF/RIFF/PNG style~~  ✓ done (`e220de7`)
 3. ~~**Numeric value semantics** — scan all u32le/be values~~  ✓ done (`d88f92e`)
 4. ~~**Ngram frequency tables** — bigram/trigram tables~~  ✓ done (`cbcb64e`)
+5. **`tiltshift scan <file> <pattern>`** — find all occurrences of a byte pattern in a file. Pattern input: hex string (same syntax as `magic add`). Output: list of offsets, with probe-style context at each hit. See DESIGN.md § Primitive API `scan`.
 
 ## Foundation
 
