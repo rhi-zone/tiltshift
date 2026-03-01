@@ -345,6 +345,28 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         println!("  top bigrams     {}", top_bigrams.join("  "));
     }
 
+    // ── Alignment hint (one per file) ───────────────────────────────────────
+    if let Some(align_sig) = all_signals
+        .iter()
+        .find(|s| matches!(&s.kind, SignalKind::AlignmentHint { .. }))
+    {
+        let SignalKind::AlignmentHint {
+            alignment,
+            entropy_spread,
+            dominant_phase,
+        } = &align_sig.kind
+        else {
+            unreachable!()
+        };
+        println!("\nALIGNMENT HINT");
+        println!("{}", "─".repeat(60));
+        println!(
+            "  {alignment}-byte alignment  spread {entropy_spread:.2} bits  phase {dominant_phase} most variable  (confidence {:.0}%)",
+            align_sig.confidence * 100.0
+        );
+        println!("  → {}", align_sig.reason);
+    }
+
     // ── Repeating stride patterns ────────────────────────────────────────────
     let stride_sigs: Vec<_> = all_signals
         .iter()
@@ -509,6 +531,11 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
     println!("  {} length-prefixed blob(s)", len_prefixed.len());
     println!("  {} chunk sequence(s)", chunk_seqs.len());
     println!("  {} numeric landmark(s)", numeric_vals.len());
+    let alignment_hint = all_signals
+        .iter()
+        .filter(|s| matches!(&s.kind, SignalKind::AlignmentHint { .. }))
+        .count();
+    println!("  {} alignment hint(s)", alignment_hint);
     println!("  {} repeating stride pattern(s)", stride_sigs.len());
     println!("  {} TLV sequence(s)", tlv_seqs.len());
     println!("  {} padding run(s)", padding_runs.len());

@@ -166,6 +166,19 @@ pub enum SignalKind {
         /// Type codes of the first up to 8 records.
         type_samples: Vec<u32>,
     },
+    /// Structural regularity at a specific byte alignment boundary.
+    ///
+    /// Detected by comparing per-phase Shannon entropy across the file: when one
+    /// phase offset is consistently more (or less) varied than the others, the
+    /// data respects that alignment.
+    AlignmentHint {
+        /// Dominant alignment in bytes: 2, 4, 8, or 16.
+        alignment: usize,
+        /// max(H(phase)) - min(H(phase)) in bits — how non-uniform the entropy profile is.
+        entropy_spread: f64,
+        /// Phase offset (0..alignment) with the highest per-phase entropy.
+        dominant_phase: usize,
+    },
     /// A u32 value with structural significance (power-of-two, file-size match,
     /// or a plausible in-bounds offset found in the header region).
     NumericValue {
