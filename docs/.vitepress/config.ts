@@ -48,6 +48,7 @@ export default withMermaid(
               { text: 'scan', link: '/cli/scan' },
               { text: 'magic', link: '/cli/magic' },
               { text: 'obfuscate', link: '/cli/obfuscate' },
+              { text: 'region', link: '/cli/region' },
             ],
           },
         ],
