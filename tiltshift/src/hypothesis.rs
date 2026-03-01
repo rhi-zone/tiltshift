@@ -277,6 +277,30 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
             )],
         }),
 
+        SignalKind::OffsetGraph {
+            pointer_width,
+            little_endian,
+            component_nodes,
+            component_edges,
+            ..
+        } => {
+            let endian = if *little_endian { "le" } else { "be" };
+            let label = format!(
+                "Offset graph — u{}{endian} — {component_nodes} nodes, {component_edges} edges",
+                pointer_width * 8,
+            );
+            Some(Hypothesis {
+                region: sig.region.clone(),
+                label,
+                confidence: sig.confidence,
+                signals: vec![sig.clone()],
+                alternatives: vec![(
+                    "coincidental within-bounds values".to_string(),
+                    (1.0_f64 - sig.confidence).max(0.05),
+                )],
+            })
+        }
+
         // NullTerminatedString: fully handled by compound_string_tables.
         // Everything else (EntropyBlock, Padding, ChiSquare, CompressionProbe,
         // NgramProfile) is either too fine-grained or handled in pass 2.
@@ -741,6 +765,7 @@ pub fn signal_kind_label(kind: &SignalKind) -> &'static str {
         SignalKind::Padding { .. } => "padding",
         SignalKind::PackedField { .. } => "packed nibble fields",
         SignalKind::NumericValue { .. } => "numeric value",
+        SignalKind::OffsetGraph { .. } => "offset graph",
     }
 }
 

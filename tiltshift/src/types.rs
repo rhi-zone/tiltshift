@@ -240,6 +240,26 @@ pub enum SignalKind {
         /// Human-readable interpretation hint.
         hint: String,
     },
+    /// A directed graph of candidate pointer/offset relationships found across the file.
+    ///
+    /// Emitted when multiple within-bounds pointer values form a connected component
+    /// large enough to suggest intentional pointer structure rather than coincidence.
+    OffsetGraph {
+        /// Width of pointer fields in bytes: 2 (u16), 4 (u32), or 8 (u64).
+        pointer_width: u8,
+        /// Whether LE byte order was used to read pointer values.
+        little_endian: bool,
+        /// Total candidate pointer count (within-bounds values at aligned positions).
+        candidate_count: usize,
+        /// Nodes (distinct offsets) in the largest connected component.
+        component_nodes: usize,
+        /// Directed edges in the largest connected component.
+        component_edges: usize,
+        /// Fraction of scanned positions whose value was within bounds.
+        pointer_density: f64,
+        /// Up to 8 representative (source, target) offset pairs from the component.
+        sample_edges: Vec<(usize, usize)>,
+    },
     /// A u32 value with structural significance (power-of-two, file-size match,
     /// or a plausible in-bounds offset found in the header region).
     NumericValue {

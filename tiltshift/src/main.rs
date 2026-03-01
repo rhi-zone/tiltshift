@@ -647,6 +647,51 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         println!("  → {hint}");
     }
 
+    // ── Offset graph (one per width/endian pair) ─────────────────────────────
+    let offset_graph_sigs: Vec<_> = all_signals
+        .iter()
+        .filter(|s| matches!(&s.kind, SignalKind::OffsetGraph { .. }))
+        .collect();
+
+    if !offset_graph_sigs.is_empty() {
+        println!("\nOFFSET GRAPH");
+        println!("{}", "─".repeat(60));
+        for sig in &offset_graph_sigs {
+            let SignalKind::OffsetGraph {
+                pointer_width,
+                little_endian,
+                component_nodes,
+                component_edges,
+                pointer_density,
+                sample_edges,
+                candidate_count: _,
+            } = &sig.kind
+            else {
+                unreachable!()
+            };
+            let endian = if *little_endian { "le" } else { "be" };
+            println!(
+                "  u{}{}  {} nodes  {} edges  density {:.1}%  (confidence {:.0}%)",
+                pointer_width * 8,
+                endian,
+                component_nodes,
+                component_edges,
+                pointer_density * 100.0,
+                sig.confidence * 100.0,
+            );
+            const EDGE_DISPLAY_CAP: usize = 8;
+            for &(src, dst) in sample_edges.iter().take(EDGE_DISPLAY_CAP) {
+                println!("    0x{src:06x} → 0x{dst:06x}");
+            }
+            if *component_edges > EDGE_DISPLAY_CAP {
+                println!(
+                    "    … {} more edges (use --json for full list)",
+                    component_edges - EDGE_DISPLAY_CAP
+                );
+            }
+        }
+    }
+
     // ── Compression ratio probe (one per file) ───────────────────────────────
     if let Some(compress_sig) = all_signals
         .iter()
@@ -729,6 +774,7 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         .filter(|s| matches!(&s.kind, SignalKind::PackedField { .. }))
         .count();
     println!("  {} packed nibble field signal(s)", packed_count);
+    println!("  {} offset graph signal(s)", offset_graph_sigs.len());
     println!("  {} repeating stride pattern(s)", stride_sigs.len());
     println!("  {} TLV sequence(s)", tlv_seqs.len());
     println!("  {} padding run(s)", padding_runs.len());

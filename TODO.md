@@ -35,7 +35,7 @@
 - [ ] Repetition / stride detector (find arrays of structs) (DESIGN: Structural signals)
 - [x] Numeric value semantics (power of two, matches file size, within-bounds pointer in header region) (DESIGN: Numeric value semantics)
 - [x] Padding detector (runs of 0x00 or 0xFF) (DESIGN: Numeric value semantics)
-- [ ] Pointer / offset graph builder — render as graph; pointer chasing should be automatic (DESIGN: Pointer / offset graph)
+- [x] Pointer / offset graph builder — render as graph; pointer chasing should be automatic (DESIGN: Pointer / offset graph)  ✓ done
 - [x] Variable-length integer encoding detector (LEB128, UTF-8 continuation) (DESIGN: Bit-level signals)  ✓ done
 - [x] Packed field detector (nibble-level independent variation) (DESIGN: Bit-level signals)  ✓ done (`d4d1108`)
 
@@ -94,6 +94,7 @@
 ## Stretch
 
 - [x] `tiltshift obfuscate <file>` — copy file to `<filename>.unk` then zero out known magic bytes to produce an opaque blob for analysis testing  ✓ done
+- [ ] V8 compressed pointer cluster — u32 values with low bit=1 (tagged pointers), narrow upper-32 range (shared cage base); emit `CompressedPointerCluster` signal (future extension of offset graph)
 - [ ] REPL / interactive session for iterative exploration
 - [ ] normalize integration (structural view of tiltshift's own output) — same pattern, different domain (DESIGN: Relation to rhi ecosystem)
 - [ ] paraphase integration (tiltshift output as format understanding input) — paraphase needs format understanding before planning conversion routes (DESIGN: Relation to rhi ecosystem)
