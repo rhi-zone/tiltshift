@@ -133,6 +133,26 @@ pub enum SignalKind {
         /// Fraction of body bytes that are printable ASCII (0.0–1.0).
         printable_ratio: f64,
     },
+    /// Bigram frequency profile for the whole file, used to classify data type.
+    NgramProfile {
+        /// Shannon entropy of the bigram distribution (0–16 bits).
+        bigram_entropy: f64,
+        /// The five most frequent bigrams, e.g. `["00 00 (12.3%)", …]`.
+        top_bigrams: Vec<String>,
+        /// Coarse data-type classification: "text", "sparse/structured",
+        /// "compressed/random", or "mixed".
+        data_type_hint: String,
+    },
+    /// A 4-byte pattern that recurs at a consistent stride through the file,
+    /// suggesting an array of fixed-size records.
+    RepeatedPattern {
+        /// The repeating byte sequence.
+        pattern: Vec<u8>,
+        /// Gap in bytes between consecutive occurrences (= record size candidate).
+        stride: usize,
+        /// Total number of times the pattern was found.
+        occurrences: usize,
+    },
     /// A u32 value with structural significance (power-of-two, file-size match,
     /// or a plausible in-bounds offset found in the header region).
     NumericValue {

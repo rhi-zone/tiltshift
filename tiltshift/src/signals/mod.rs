@@ -2,6 +2,7 @@ pub mod chunk;
 pub mod entropy;
 pub mod length_prefix;
 pub mod magic;
+pub mod ngram;
 pub mod numeric;
 pub mod strings;
 
@@ -18,6 +19,7 @@ pub fn extract_all(data: &[u8], entropy_block_size: usize, corpus: &Corpus) -> V
     signals.extend(length_prefix::scan_length_prefixed(data));
     signals.extend(chunk::scan_chunks(data));
     signals.extend(numeric::scan_numeric_landmarks(data));
+    signals.extend(ngram::scan_ngrams(data));
     signals.extend(entropy::entropy_map(
         data,
         entropy_block_size,

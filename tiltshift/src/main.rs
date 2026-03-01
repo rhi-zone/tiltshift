@@ -302,6 +302,66 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         }
     }
 
+    // ── Ngram profile (one per file) ────────────────────────────────────────
+    if let Some(profile) = all_signals
+        .iter()
+        .find(|s| matches!(&s.kind, SignalKind::NgramProfile { .. }))
+    {
+        let SignalKind::NgramProfile {
+            bigram_entropy,
+            top_bigrams,
+            data_type_hint,
+        } = &profile.kind
+        else {
+            unreachable!()
+        };
+        println!("\nNGRAM PROFILE");
+        println!("{}", "─".repeat(60));
+        println!("  bigram entropy  {bigram_entropy:.2} bits   hint: {data_type_hint}");
+        println!("  top bigrams     {}", top_bigrams.join("  "));
+    }
+
+    // ── Repeating stride patterns ────────────────────────────────────────────
+    let stride_sigs: Vec<_> = all_signals
+        .iter()
+        .filter(|s| matches!(&s.kind, SignalKind::RepeatedPattern { .. }))
+        .collect();
+
+    if !stride_sigs.is_empty() {
+        println!("\nREPEATING PATTERNS  (stride)");
+        println!("{}", "─".repeat(60));
+        const STRIDE_DISPLAY_CAP: usize = 8;
+        for sig in stride_sigs.iter().take(STRIDE_DISPLAY_CAP) {
+            let SignalKind::RepeatedPattern {
+                pattern,
+                stride,
+                occurrences,
+            } = &sig.kind
+            else {
+                unreachable!()
+            };
+            let hex: String = pattern
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!(
+                "  {:8}  stride={:<4}  ×{:<3}  [{}]  (confidence {:.0}%)",
+                sig.region.to_string(),
+                stride,
+                occurrences,
+                hex,
+                sig.confidence * 100.0
+            );
+        }
+        if stride_sigs.len() > STRIDE_DISPLAY_CAP {
+            println!(
+                "  … {} more (use --json for full list)",
+                stride_sigs.len() - STRIDE_DISPLAY_CAP
+            );
+        }
+    }
+
     let entropy_blocks: Vec<_> = all_signals
         .iter()
         .filter(|s| matches!(&s.kind, SignalKind::EntropyBlock { .. }))
@@ -331,6 +391,7 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
     println!("  {} length-prefixed blob(s)", len_prefixed.len());
     println!("  {} chunk sequence(s)", chunk_seqs.len());
     println!("  {} numeric landmark(s)", numeric_vals.len());
+    println!("  {} repeating stride pattern(s)", stride_sigs.len());
     println!("  {} entropy block(s)", entropy_blocks.len());
 
     let high_entropy_bytes: usize = entropy_blocks
