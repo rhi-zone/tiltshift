@@ -2,6 +2,8 @@
 
 ## Foundation
 
+<!-- Core types flow directly from the iterative loop model: signals(region) → hypotheses → partial_parse → new_constraints (DESIGN.md § The iterative loop) -->
+
 - [ ] Cargo workspace + `tiltshift-core` crate
 - [ ] VitePress docs config (`docs/.vitepress/config.ts`, `docs/index.md`)
 - [ ] Core data types: `Region`, `Signal`, `Hypothesis`, `PartialSchema`
@@ -9,46 +11,56 @@
 
 ## Signal extraction
 
-- [ ] Byte frequency histogram
-- [ ] Bigram / trigram frequency tables
-- [ ] Shannon entropy (sliding window, not just point-in-time)
-- [ ] Chi-square test for uniformity
-- [ ] Compression ratio probe (try zlib/zstd on a region, measure result)
-- [ ] Magic byte scanner (corpus of known magics: PNG, ZIP, ELF, PDF, BMP, WAV, ...)
-- [ ] Null-terminated string scanner
-- [ ] Length-prefixed blob detector (u8/u16/u32 × 3 endiannesses)
-- [ ] Chunk pattern detector (tag + length + data, repeating — IFF/RIFF/PNG style)
-- [ ] TLV detector (type-length-value, various widths)
-- [ ] Alignment map (regularity at 2/4/8-byte boundaries)
-- [ ] Repetition / stride detector (find arrays of structs)
-- [ ] Numeric value semantics (high bits zero, power of two, matches file size, within-bounds pointer)
-- [ ] Padding detector (runs of 0x00 or 0xFF)
-- [ ] Pointer / offset graph builder
-- [ ] Variable-length integer encoding detector (LEB128, UTF-8 continuation)
-- [ ] Packed field detector (nibble-level independent variation)
+<!-- Full taxonomy in DESIGN.md § Signal taxonomy — statistical, structural, numeric, pointer/offset, bit-level, multi-file -->
+
+- [ ] Byte frequency histogram — shape indicates data type (DESIGN: Statistical signals)
+- [ ] Bigram / trigram frequency tables — discriminate types better than entropy alone; repeated ngrams at fixed stride → struct fields (DESIGN: Statistical signals)
+- [ ] Shannon entropy (sliding window, not just point-in-time) — transitions between regions > absolute values (DESIGN: Statistical signals)
+- [ ] Chi-square test for uniformity (DESIGN: Statistical signals)
+- [ ] Compression ratio probe (try zlib/zstd on a region, measure result) — more honest proxy for randomness than entropy (DESIGN: Statistical signals)
+- [ ] Magic byte scanner (corpus of known magics: PNG, ZIP, ELF, PDF, BMP, WAV, ...) — detect at non-zero offsets; correlate across files (DESIGN: Structural signals)
+- [ ] Null-terminated string scanner — use as structural anchors (DESIGN: Structural signals)
+- [ ] Length-prefixed blob detector (u8/u16/u32 × 3 endiannesses) — especially strong when followed by printable ASCII (DESIGN: Structural signals)
+- [ ] Chunk pattern detector (tag + length + data, repeating — IFF/RIFF/PNG style) (DESIGN: Structural signals)
+- [ ] TLV detector (type-length-value, various widths) (DESIGN: Structural signals)
+- [ ] Alignment map (regularity at 2/4/8-byte boundaries) — find struct boundaries (DESIGN: Structural signals)
+- [ ] Repetition / stride detector (find arrays of structs) (DESIGN: Structural signals)
+- [ ] Numeric value semantics (high bits zero, power of two, matches file size, within-bounds pointer) (DESIGN: Numeric value semantics)
+- [ ] Padding detector (runs of 0x00 or 0xFF) (DESIGN: Numeric value semantics)
+- [ ] Pointer / offset graph builder — render as graph; pointer chasing should be automatic (DESIGN: Pointer / offset graph)
+- [ ] Variable-length integer encoding detector (LEB128, UTF-8 continuation) (DESIGN: Bit-level signals)
+- [ ] Packed field detector (nibble-level independent variation) (DESIGN: Bit-level signals)
 
 ## Hypothesis engine
 
+<!-- Differentiator is feedback richness: what was found, confidence + contributing signals, why, alternatives considered, what remains (DESIGN.md § Output quality) -->
+
 - [ ] Signal → hypothesis conversion with confidence scoring
-- [ ] Signal compounding: weak signals accumulate into stronger hypotheses
-- [ ] `what_could_this_be(offset, len)` — ranked interpretations with reasoning
-- [ ] Explanation generation: every hypothesis explains its contributing signals
+- [ ] Signal compounding: weak signals accumulate into stronger hypotheses — "maybe length" + "consistent following region" + "ngram match" → confident hypothesis, not three separate weak guesses (DESIGN: Output quality)
+- [ ] `what_could_this_be(offset, len)` — ranked interpretations with reasoning (DESIGN: Primitive API)
+- [ ] Explanation generation: every hypothesis explains its contributing signals and alternatives considered (DESIGN: Output quality)
 
 ## Iterative refinement
 
-- [ ] Partial schema representation (some regions explained, others unknown)
-- [ ] Constraint propagation: confirmed structure narrows remaining unknowns
-- [ ] Recursive descent into confirmed sub-regions (chunk interior = fresh analysis target with context)
+<!-- Core loop: signals(region) → hypotheses → partial_parse → new_constraints → signals(subregion) → ... (DESIGN.md § The iterative loop) -->
+
+- [ ] Partial schema representation (some regions explained, others unknown) — e.g. `[KNOWN: 0x00–0x3F] [UNKNOWN: 0x40–0x7F] [KNOWN: chunk @ 0x80]`
+- [ ] Constraint propagation: confirmed structure narrows remaining unknowns — unknown region's size/context/neighbors become known
+- [ ] Recursive descent into confirmed sub-regions — chunk interior = fresh analysis target whose type tag, position, size feed back as constraints (DESIGN: The iterative loop)
 - [ ] Session state: persist partial results across invocations
 
 ## Multi-file analysis
 
-- [ ] Structural delta (`diff(file_a, file_b)`) — field-level, not byte-level
-- [ ] Cross-file magic correlation (same bytes at same offset across samples)
-- [ ] Corpus model builder (feed N known-format files, extract structural model)
-- [ ] Anomaly detection mode (file vs corpus model → what doesn't fit)
+<!-- Two unknown files: correlate to separate structural fields from data fields. Known formats: validate signals, build reference library. (DESIGN.md § Known vs unknown formats, § Multi-file signals) -->
+
+- [ ] Structural delta (`diff(file_a, file_b)`) — field-level, not byte-level; fields that vary=data, identical=structural (DESIGN: Multi-file signals)
+- [ ] Cross-file magic correlation (same bytes at same offset across samples) (DESIGN: Multi-file signals)
+- [ ] Corpus model builder (feed N known-format files, extract structural model) — known formats are the training data and validation set (DESIGN: Known vs unknown formats)
+- [ ] Anomaly detection mode (file vs corpus model → what doesn't fit) — steganography detection is a natural byproduct (DESIGN: Scope)
 
 ## Known format library
+
+<!-- Running tiltshift on known formats validates signals; results become reference models for detecting fragments in unknown data. (DESIGN.md § Known vs unknown formats) -->
 
 - [ ] PNG (chunk structure, IHDR/IDAT/IEND, zlib payload)
 - [ ] ZIP (local file headers, central directory, EOCD)
@@ -61,16 +73,18 @@
 
 ## CLI / output
 
-- [ ] `tiltshift probe <file> <offset> [len]` — typed interpretations at offset
-- [ ] `tiltshift scan <file> <pattern>` — find all occurrences
-- [ ] `tiltshift analyze <file>` — full iterative analysis, structured output
-- [ ] `tiltshift diff <file_a> <file_b>` — structural delta
+<!-- Commands map to the Primitive API sketch in DESIGN.md § Primitive API; JSON mode enables agent consumption (DESIGN.md § Problem space) -->
+
+- [ ] `tiltshift probe <file> <offset> [len]` — typed interpretations at offset (DESIGN: Primitive API `probe`)
+- [ ] `tiltshift scan <file> <pattern>` — find all occurrences (DESIGN: Primitive API `scan`)
+- [ ] `tiltshift analyze <file>` — full iterative analysis, structured output (DESIGN: Primitive API `what_could_this_be`, iterative loop)
+- [ ] `tiltshift diff <file_a> <file_b>` — structural delta (DESIGN: Primitive API `diff`)
 - [ ] `tiltshift corpus add <format> <files...>` — add to known format library
-- [ ] JSON output mode for agent consumption
+- [ ] JSON output mode for agent consumption — agents can't use visual interfaces; output must be explicit and queryable (DESIGN: Problem space)
 - [ ] Confidence thresholds / verbosity flags
 
 ## Stretch
 
 - [ ] REPL / interactive session for iterative exploration
-- [ ] normalize integration (structural view of tiltshift's own output)
-- [ ] paraphase integration (tiltshift output as format understanding input)
+- [ ] normalize integration (structural view of tiltshift's own output) — same pattern, different domain (DESIGN: Relation to rhi ecosystem)
+- [ ] paraphase integration (tiltshift output as format understanding input) — paraphase needs format understanding before planning conversion routes (DESIGN: Relation to rhi ecosystem)
