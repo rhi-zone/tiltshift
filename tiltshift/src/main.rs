@@ -66,6 +66,17 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+
+    /// Copy a file to <file>.unk with all known magic bytes zeroed out.
+    ///
+    /// Produces an opaque blob useful for testing signal extractors against
+    /// files whose format has been deliberately obscured.
+    Obfuscate {
+        file: PathBuf,
+        /// Overwrite the output file if it already exists.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -110,6 +121,7 @@ fn main() -> anyhow::Result<()> {
             context,
             json,
         } => cmd_scan(&file, &pattern, context, json),
+        Command::Obfuscate { file, force } => cmd_obfuscate(&file, force),
     }
 }
 
@@ -778,6 +790,71 @@ fn parse_offset(s: &str) -> Option<usize> {
     } else {
         s.parse::<usize>().ok()
     }
+}
+
+fn cmd_obfuscate(path: &PathBuf, force: bool) -> anyhow::Result<()> {
+    let mapped = MappedFile::open(path)?;
+    let data = mapped.bytes();
+
+    // Build output path: append .unk suffix
+    let out_path = {
+        let mut s = path.as_os_str().to_owned();
+        s.push(".unk");
+        PathBuf::from(s)
+    };
+
+    if out_path.exists() && !force {
+        anyhow::bail!(
+            "output file already exists: {}  (use --force to overwrite)",
+            out_path.display()
+        );
+    }
+
+    let corpus = corpus::load();
+    let mut buf = data.to_vec();
+    let mut zeroed: Vec<(usize, String, usize)> = Vec::new(); // (offset, name, magic_len)
+
+    for entry in &corpus.formats {
+        let Ok(magic) = entry.magic_bytes() else {
+            continue;
+        };
+        if magic.is_empty() {
+            continue;
+        }
+        let hits = search::find_all(data, &magic);
+        for offset in hits {
+            // Zero the magic bytes in the output buffer
+            for b in buf[offset..offset + magic.len()].iter_mut() {
+                *b = 0x00;
+            }
+            zeroed.push((offset, entry.name.clone(), magic.len()));
+        }
+    }
+
+    std::fs::write(&out_path, &buf)?;
+
+    let bar = "═".repeat(60);
+    println!("{bar}");
+    println!(
+        "  tiltshift obfuscate  {}  ({} bytes)",
+        path.display(),
+        data.len()
+    );
+    println!("{bar}");
+
+    if zeroed.is_empty() {
+        println!("  no known magic bytes found — file is already opaque");
+    } else {
+        println!("  zeroed {} magic region(s):", zeroed.len());
+        for (offset, name, len) in &zeroed {
+            println!("  0x{offset:08x}  {name}  ({len} bytes)");
+        }
+    }
+
+    println!();
+    println!("  output: {}", out_path.display());
+    println!();
+    Ok(())
 }
 
 fn cmd_magic_add(name: &str, magic: &str) -> anyhow::Result<()> {
