@@ -621,6 +621,32 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         }
     }
 
+    // ── Packed nibble sub-fields (one per file) ──────────────────────────────
+    if let Some(packed_sig) = all_signals
+        .iter()
+        .find(|s| matches!(&s.kind, SignalKind::PackedField { .. }))
+    {
+        let SignalKind::PackedField {
+            high_nibble_entropy,
+            low_nibble_entropy,
+            mutual_information,
+            independence_ratio,
+            hint,
+        } = &packed_sig.kind
+        else {
+            unreachable!()
+        };
+        println!("\nPACKED NIBBLE FIELDS");
+        println!("{}", "─".repeat(60));
+        println!(
+            "  H_hi={high_nibble_entropy:.2}  H_lo={low_nibble_entropy:.2}  \
+             MI={mutual_information:.3}  ind={independence_ratio:.3}  \
+             (confidence {:.0}%)",
+            packed_sig.confidence * 100.0
+        );
+        println!("  → {hint}");
+    }
+
     // ── Compression ratio probe (one per file) ───────────────────────────────
     if let Some(compress_sig) = all_signals
         .iter()
@@ -698,6 +724,11 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         .count();
     println!("  {} compression probe(s)", compress_count);
     println!("  {} variable-length integer run(s)", varint_sigs.len());
+    let packed_count = all_signals
+        .iter()
+        .filter(|s| matches!(&s.kind, SignalKind::PackedField { .. }))
+        .count();
+    println!("  {} packed nibble field signal(s)", packed_count);
     println!("  {} repeating stride pattern(s)", stride_sigs.len());
     println!("  {} TLV sequence(s)", tlv_seqs.len());
     println!("  {} padding run(s)", padding_runs.len());

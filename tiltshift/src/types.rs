@@ -223,6 +223,23 @@ pub enum SignalKind {
         /// Average bytes per encoded value (always > 1.0 for both encodings).
         avg_width: f64,
     },
+    /// Nibble-level packed sub-fields detected via independence of high/low nibbles.
+    ///
+    /// Binary formats routinely pack two independent sub-fields into each byte at
+    /// the nibble boundary (bits 7–4 / bits 3–0): BCD-encoded dates, 4-bit
+    /// type + 4-bit subtype, MPEG-2 flag bytes, TCP DSCP+ECN, etc.
+    PackedField {
+        /// Shannon entropy of the high nibble (bits 7–4), 0–4 bits.
+        high_nibble_entropy: f64,
+        /// Shannon entropy of the low nibble (bits 3–0), 0–4 bits.
+        low_nibble_entropy: f64,
+        /// Estimated mutual information between nibbles (0 = independent).
+        mutual_information: f64,
+        /// H_joint / (H_high + H_low) — 1.0 = fully independent nibbles.
+        independence_ratio: f64,
+        /// Human-readable interpretation hint.
+        hint: String,
+    },
     /// A u32 value with structural significance (power-of-two, file-size match,
     /// or a plausible in-bounds offset found in the header region).
     NumericValue {

@@ -266,6 +266,17 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
             }
         }
 
+        SignalKind::PackedField { hint, .. } => Some(Hypothesis {
+            region: sig.region.clone(),
+            label: format!("Packed nibble sub-fields — {hint}"),
+            confidence: sig.confidence,
+            signals: vec![sig.clone()],
+            alternatives: vec![(
+                "coincidental nibble independence".to_string(),
+                0.25,
+            )],
+        }),
+
         // NullTerminatedString: fully handled by compound_string_tables.
         // Everything else (EntropyBlock, Padding, ChiSquare, CompressionProbe,
         // NgramProfile) is either too fine-grained or handled in pass 2.
@@ -728,6 +739,7 @@ pub fn signal_kind_label(kind: &SignalKind) -> &'static str {
         SignalKind::NullTerminatedString { .. } => "null-terminated string",
         SignalKind::EntropyBlock { .. } => "entropy block",
         SignalKind::Padding { .. } => "padding",
+        SignalKind::PackedField { .. } => "packed nibble fields",
         SignalKind::NumericValue { .. } => "numeric value",
     }
 }

@@ -7,6 +7,7 @@ pub mod length_prefix;
 pub mod magic;
 pub mod ngram;
 pub mod numeric;
+pub mod packed;
 pub mod padding;
 pub mod strings;
 pub mod tlv;
@@ -32,6 +33,7 @@ pub fn extract_all(data: &[u8], entropy_block_size: usize, corpus: &Corpus) -> V
     signals.extend(chisq::scan_chi_square(data));
     signals.extend(compress::scan_compress_probe(data));
     signals.extend(varint::scan_varint(data));
+    signals.extend(packed::scan_packed(data));
     signals.extend(entropy::entropy_map(
         data,
         entropy_block_size,
