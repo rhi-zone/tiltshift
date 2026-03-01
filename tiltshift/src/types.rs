@@ -153,6 +153,19 @@ pub enum SignalKind {
         /// Total number of times the pattern was found.
         occurrences: usize,
     },
+    /// A consecutive run of Type-Length-Value records with consistent field widths.
+    TlvSequence {
+        /// Width of the type field in bytes: 1 or 2.
+        type_width: u8,
+        /// Width of the length field in bytes: 1, 2, or 4.
+        len_width: u8,
+        /// Byte order used for multi-byte fields (irrelevant when both widths are 1).
+        little_endian: bool,
+        /// Number of consecutive valid records in the run.
+        record_count: usize,
+        /// Type codes of the first up to 8 records.
+        type_samples: Vec<u32>,
+    },
     /// A u32 value with structural significance (power-of-two, file-size match,
     /// or a plausible in-bounds offset found in the header region).
     NumericValue {

@@ -6,6 +6,7 @@ pub mod ngram;
 pub mod numeric;
 pub mod padding;
 pub mod strings;
+pub mod tlv;
 
 use crate::corpus::Corpus;
 use crate::types::Signal;
@@ -22,6 +23,7 @@ pub fn extract_all(data: &[u8], entropy_block_size: usize, corpus: &Corpus) -> V
     signals.extend(numeric::scan_numeric_landmarks(data));
     signals.extend(ngram::scan_ngrams(data));
     signals.extend(padding::scan_padding(data));
+    signals.extend(tlv::scan_tlv(data));
     signals.extend(entropy::entropy_map(
         data,
         entropy_block_size,

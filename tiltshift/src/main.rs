@@ -4,7 +4,7 @@ use tiltshift::{
     corpus,
     loader::MappedFile,
     probe, search, signals,
-    signals::{chunk::sequence_label, length_prefix::body_preview},
+    signals::{chunk::sequence_label, length_prefix::body_preview, tlv::tlv_label},
     types::{EntropyClass, SignalKind},
 };
 
@@ -386,6 +386,62 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         }
     }
 
+    let tlv_seqs: Vec<_> = all_signals
+        .iter()
+        .filter(|s| matches!(&s.kind, SignalKind::TlvSequence { .. }))
+        .collect();
+
+    if !tlv_seqs.is_empty() {
+        println!("\nTLV SEQUENCES");
+        println!("{}", "─".repeat(60));
+        const TLV_DISPLAY_CAP: usize = 12;
+        for sig in tlv_seqs.iter().take(TLV_DISPLAY_CAP) {
+            let SignalKind::TlvSequence {
+                type_width,
+                len_width,
+                little_endian,
+                record_count,
+                type_samples,
+            } = &sig.kind
+            else {
+                unreachable!()
+            };
+            let label = tlv_label(*type_width, *len_width, *little_endian);
+            let tw = *type_width;
+            let type_fmt: String = type_samples
+                .iter()
+                .map(|&t| {
+                    if tw == 1 {
+                        format!("{t:02x}")
+                    } else {
+                        format!("{t:04x}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = if type_samples.len() < *record_count {
+                format!(", +{} more", record_count - type_samples.len())
+            } else {
+                String::new()
+            };
+            println!(
+                "  {:8}  {} ×{}  types: [{}{} ]  (confidence {:.0}%)",
+                sig.region.to_string(),
+                label,
+                record_count,
+                type_fmt,
+                more,
+                sig.confidence * 100.0
+            );
+        }
+        if tlv_seqs.len() > TLV_DISPLAY_CAP {
+            println!(
+                "  … {} more (use --json for full list)",
+                tlv_seqs.len() - TLV_DISPLAY_CAP
+            );
+        }
+    }
+
     let padding_runs: Vec<_> = all_signals
         .iter()
         .filter(|s| matches!(&s.kind, SignalKind::Padding { .. }))
@@ -454,6 +510,7 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
     println!("  {} chunk sequence(s)", chunk_seqs.len());
     println!("  {} numeric landmark(s)", numeric_vals.len());
     println!("  {} repeating stride pattern(s)", stride_sigs.len());
+    println!("  {} TLV sequence(s)", tlv_seqs.len());
     println!("  {} padding run(s)", padding_runs.len());
     println!("  {} entropy block(s)", entropy_blocks.len());
 
