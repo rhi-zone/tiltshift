@@ -1,4 +1,5 @@
 pub mod alignment;
+pub mod chisq;
 pub mod chunk;
 pub mod entropy;
 pub mod length_prefix;
@@ -26,6 +27,7 @@ pub fn extract_all(data: &[u8], entropy_block_size: usize, corpus: &Corpus) -> V
     signals.extend(padding::scan_padding(data));
     signals.extend(tlv::scan_tlv(data));
     signals.extend(alignment::scan_alignment(data));
+    signals.extend(chisq::scan_chi_square(data));
     signals.extend(entropy::entropy_map(
         data,
         entropy_block_size,

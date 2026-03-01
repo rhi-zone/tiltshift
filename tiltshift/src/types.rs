@@ -166,6 +166,17 @@ pub enum SignalKind {
         /// Type codes of the first up to 8 records.
         type_samples: Vec<u32>,
     },
+    /// Chi-square test for byte-distribution uniformity over the whole file.
+    ///
+    /// The statistic follows χ²(255) under the null hypothesis that every byte
+    /// value is equally likely (i.e. the data is random/encrypted).
+    ChiSquare {
+        /// Raw chi-square statistic (df = 255; expected ~255 for uniform data).
+        chi_sq: f64,
+        /// Approximate P(X ≥ chi_sq) under χ²(255).  Low ≈ non-uniform;
+        /// high ≈ suspiciously uniform.
+        p_value: f64,
+    },
     /// Structural regularity at a specific byte alignment boundary.
     ///
     /// Detected by comparing per-phase Shannon entropy across the file: when one

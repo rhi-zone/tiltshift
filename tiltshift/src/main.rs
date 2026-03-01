@@ -502,6 +502,34 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         }
     }
 
+    // ── Chi-square uniformity (one per file) ────────────────────────────────
+    if let Some(chisq_sig) = all_signals
+        .iter()
+        .find(|s| matches!(&s.kind, SignalKind::ChiSquare { .. }))
+    {
+        let SignalKind::ChiSquare { chi_sq, p_value } = &chisq_sig.kind else {
+            unreachable!()
+        };
+        let label = if *p_value < 0.01 {
+            "non-uniform"
+        } else if *p_value < 0.05 {
+            "mildly non-uniform"
+        } else if *p_value > 0.99 {
+            "suspiciously uniform"
+        } else if *p_value > 0.95 {
+            "over-uniform"
+        } else {
+            "consistent with uniform"
+        };
+        println!("\nCHI-SQUARE UNIFORMITY");
+        println!("{}", "─".repeat(60));
+        println!(
+            "  chi-sq {chi_sq:.1}  p={p_value:.3}  → {label}  (confidence {:.0}%)",
+            chisq_sig.confidence * 100.0
+        );
+        println!("  → {}", chisq_sig.reason);
+    }
+
     let entropy_blocks: Vec<_> = all_signals
         .iter()
         .filter(|s| matches!(&s.kind, SignalKind::EntropyBlock { .. }))
@@ -536,6 +564,11 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         .filter(|s| matches!(&s.kind, SignalKind::AlignmentHint { .. }))
         .count();
     println!("  {} alignment hint(s)", alignment_hint);
+    let chisq_count = all_signals
+        .iter()
+        .filter(|s| matches!(&s.kind, SignalKind::ChiSquare { .. }))
+        .count();
+    println!("  {} chi-square test(s)", chisq_count);
     println!("  {} repeating stride pattern(s)", stride_sigs.len());
     println!("  {} TLV sequence(s)", tlv_seqs.len());
     println!("  {} padding run(s)", padding_runs.len());
