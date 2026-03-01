@@ -36,7 +36,7 @@
 - [x] Numeric value semantics (power of two, matches file size, within-bounds pointer in header region) (DESIGN: Numeric value semantics)
 - [x] Padding detector (runs of 0x00 or 0xFF) (DESIGN: Numeric value semantics)
 - [ ] Pointer / offset graph builder — render as graph; pointer chasing should be automatic (DESIGN: Pointer / offset graph)
-- [ ] Variable-length integer encoding detector (LEB128, UTF-8 continuation) (DESIGN: Bit-level signals)
+- [x] Variable-length integer encoding detector (LEB128, UTF-8 continuation) (DESIGN: Bit-level signals)  ✓ done
 - [ ] Packed field detector (nibble-level independent variation) (DESIGN: Bit-level signals)
 
 ## Hypothesis engine

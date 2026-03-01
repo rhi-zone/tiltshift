@@ -10,6 +10,7 @@ pub mod numeric;
 pub mod padding;
 pub mod strings;
 pub mod tlv;
+pub mod varint;
 
 use crate::corpus::Corpus;
 use crate::types::Signal;
@@ -30,6 +31,7 @@ pub fn extract_all(data: &[u8], entropy_block_size: usize, corpus: &Corpus) -> V
     signals.extend(alignment::scan_alignment(data));
     signals.extend(chisq::scan_chi_square(data));
     signals.extend(compress::scan_compress_probe(data));
+    signals.extend(varint::scan_varint(data));
     signals.extend(entropy::entropy_map(
         data,
         entropy_block_size,

@@ -206,6 +206,23 @@ pub enum SignalKind {
         /// Phase offset (0..alignment) with the highest per-phase entropy.
         dominant_phase: usize,
     },
+    /// A run of variable-length encoded integers in a recognized VarInt scheme.
+    ///
+    /// Detected encodings:
+    /// - `"leb128-unsigned"` — unsigned Little-Endian Base-128 (WebAssembly, protobuf,
+    ///   DWARF, DEX).  Only emitted when ≥ 5 consecutive values are multi-byte.
+    /// - `"utf8-multibyte"` — consecutive non-ASCII UTF-8 characters with no ASCII
+    ///   bytes between them (CJK blocks, emoji runs, non-Latin script fields).
+    VarInt {
+        /// Encoding scheme: `"leb128-unsigned"` or `"utf8-multibyte"`.
+        encoding: String,
+        /// Number of consecutive successfully decoded values.
+        count: usize,
+        /// Total bytes consumed by the run.
+        bytes_consumed: usize,
+        /// Average bytes per encoded value (always > 1.0 for both encodings).
+        avg_width: f64,
+    },
     /// A u32 value with structural significance (power-of-two, file-size match,
     /// or a plausible in-bounds offset found in the header region).
     NumericValue {

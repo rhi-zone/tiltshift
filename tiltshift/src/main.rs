@@ -542,6 +542,44 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         println!("  → {}", chisq_sig.reason);
     }
 
+    // ── Variable-length integers ─────────────────────────────────────────────
+    let varint_sigs: Vec<_> = all_signals
+        .iter()
+        .filter(|s| matches!(&s.kind, SignalKind::VarInt { .. }))
+        .collect();
+
+    if !varint_sigs.is_empty() {
+        println!("\nVARIABLE-LENGTH INTEGERS");
+        println!("{}", "─".repeat(60));
+        const VARINT_DISPLAY_CAP: usize = 12;
+        for sig in varint_sigs.iter().take(VARINT_DISPLAY_CAP) {
+            let SignalKind::VarInt {
+                encoding,
+                count,
+                avg_width,
+                ..
+            } = &sig.kind
+            else {
+                unreachable!()
+            };
+            println!(
+                "  {:8}  {} ×{}  avg {:.1} bytes  (confidence {:.0}%)",
+                sig.region.to_string(),
+                encoding,
+                count,
+                avg_width,
+                sig.confidence * 100.0
+            );
+            println!("            → {}", sig.reason);
+        }
+        if varint_sigs.len() > VARINT_DISPLAY_CAP {
+            println!(
+                "  … {} more (use --json for full list)",
+                varint_sigs.len() - VARINT_DISPLAY_CAP
+            );
+        }
+    }
+
     // ── Compression ratio probe (one per file) ───────────────────────────────
     if let Some(compress_sig) = all_signals
         .iter()
@@ -618,6 +656,7 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         .filter(|s| matches!(&s.kind, SignalKind::CompressionProbe { .. }))
         .count();
     println!("  {} compression probe(s)", compress_count);
+    println!("  {} variable-length integer run(s)", varint_sigs.len());
     println!("  {} repeating stride pattern(s)", stride_sigs.len());
     println!("  {} TLV sequence(s)", tlv_seqs.len());
     println!("  {} padding run(s)", padding_runs.len());
