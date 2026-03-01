@@ -4,7 +4,7 @@ use tiltshift::{
     corpus,
     loader::MappedFile,
     probe, signals,
-    signals::length_prefix::body_preview,
+    signals::{chunk::sequence_label, length_prefix::body_preview},
     types::{EntropyClass, SignalKind},
 };
 
@@ -195,6 +195,45 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         }
     }
 
+    let chunk_seqs: Vec<_> = all_signals
+        .iter()
+        .filter(|s| matches!(&s.kind, SignalKind::ChunkSequence { .. }))
+        .collect();
+
+    if !chunk_seqs.is_empty() {
+        println!("\nCHUNK SEQUENCES");
+        println!("{}", "─".repeat(60));
+        for sig in &chunk_seqs {
+            let SignalKind::ChunkSequence {
+                format_hint,
+                tag_first,
+                little_endian,
+                chunk_count,
+                tags,
+            } = &sig.kind
+            else {
+                unreachable!()
+            };
+            let layout = sequence_label(*tag_first, *little_endian);
+            let tag_list = tags.join(", ");
+            let more = if tags.len() < *chunk_count {
+                format!(", +{} more", chunk_count - tags.len())
+            } else {
+                String::new()
+            };
+            println!(
+                "  {:8}  {} {} ({} chunks)  [{}{}]  (confidence {:.0}%)",
+                sig.region.to_string(),
+                format_hint,
+                layout,
+                chunk_count,
+                tag_list,
+                more,
+                sig.confidence * 100.0
+            );
+        }
+    }
+
     let entropy_blocks: Vec<_> = all_signals
         .iter()
         .filter(|s| matches!(&s.kind, SignalKind::EntropyBlock { .. }))
@@ -222,6 +261,7 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
     println!("  {} magic byte match(es)", magic.len());
     println!("  {} null-terminated string(s)", strings.len());
     println!("  {} length-prefixed blob(s)", len_prefixed.len());
+    println!("  {} chunk sequence(s)", chunk_seqs.len());
     println!("  {} entropy block(s)", entropy_blocks.len());
 
     let high_entropy_bytes: usize = entropy_blocks

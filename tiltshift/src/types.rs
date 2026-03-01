@@ -108,6 +108,19 @@ pub enum SignalKind {
         byte_value: u8,
         run_len: usize,
     },
+    /// A repeating (tag, length, data) sequence in the IFF/RIFF/PNG family.
+    ChunkSequence {
+        /// Detected format family: "RIFF", "IFF", "PNG", "MP4/QuickTime", or "generic".
+        format_hint: String,
+        /// true = [tag][len][data] (RIFF/IFF), false = [len][tag][data] (PNG).
+        tag_first: bool,
+        /// Byte order of the length field.
+        little_endian: bool,
+        /// Number of consecutive valid chunks in the run.
+        chunk_count: usize,
+        /// FourCC tags of the first up to 8 chunks.
+        tags: Vec<String>,
+    },
     /// A length prefix (u8 / u16 / u32, LE or BE) whose declared byte count
     /// lands within the file and is followed by plausible body data.
     LengthPrefixedBlob {
