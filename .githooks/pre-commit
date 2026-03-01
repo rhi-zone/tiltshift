@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 set -e
 
-if [ -f Cargo.toml ]; then
-  echo "Running cargo fmt..."
-  cargo fmt --all
-  git add -u
+echo "Running cargo fmt..."
+cargo fmt --all
+git add -u
 
-  echo "Running cargo clippy..."
-  cargo clippy --all-targets --all-features -- -D warnings
-fi
+echo "Running cargo clippy..."
+cargo clippy --all-targets --all-features -- -D warnings
 
 echo "Pre-commit checks passed!"
