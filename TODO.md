@@ -13,7 +13,7 @@
 <!-- Core types flow directly from the iterative loop model: signals(region) → hypotheses → partial_parse → new_constraints (DESIGN.md § The iterative loop) -->
 
 - [x] Cargo workspace + `tiltshift` crate (single crate with lib + bin targets)
-- [ ] VitePress docs config (`docs/.vitepress/config.ts`, `docs/index.md`)
+- [x] VitePress docs config (`docs/.vitepress/config.ts`, `docs/index.md`)  ✓ done (`e30a9d1`)
 - [x] Core data types: `Region`, `Signal`, `Hypothesis`, `PartialSchema`
 - [x] File loading with mmap for large inputs
 
