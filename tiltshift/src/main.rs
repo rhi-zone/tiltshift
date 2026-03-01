@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use tiltshift::{
     constraint, corpus, hypothesis,
     loader::MappedFile,
-    probe, search, signals,
+    probe, search, session, signals,
     signals::{chunk::sequence_label, length_prefix::body_preview, tlv::tlv_label},
-    types::{EntropyClass, LayoutSpan, Signal, SignalKind},
+    types::{EntropyClass, Hypothesis, LayoutSpan, Region, Signal, SignalKind},
 };
 
 #[derive(Parser)]
@@ -144,6 +144,26 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+
+    /// Tag a byte range with a human-readable label, persisted in <file>.tiltshift.toml.
+    ///
+    /// Annotations survive re-analysis and are shown as ANNOTATED spans in the LAYOUT
+    /// section of `tiltshift analyze`. Running `annotate` on an already-annotated region
+    /// (same offset+len) replaces the existing label.
+    ///
+    /// OFFSET and LEN may be decimal or hex (0x…).
+    /// Examples:
+    ///   tiltshift annotate data.bin 0 4 "File header"
+    ///   tiltshift annotate data.bin 0x40 64 "Resource table"
+    Annotate {
+        file: PathBuf,
+        /// Byte offset to annotate (decimal or 0x hex).
+        offset: String,
+        /// Number of bytes to annotate (decimal or 0x hex).
+        len: String,
+        /// Human-readable label for this region.
+        label: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -211,6 +231,12 @@ fn main() -> anyhow::Result<()> {
             block_size,
             json,
         } => cmd_diff(&file_a, &file_b, min_structural, block_size, json),
+        Command::Annotate {
+            file,
+            offset,
+            len,
+            label,
+        } => cmd_annotate(&file, &offset, &len, &label),
     }
 }
 
@@ -223,8 +249,22 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
     let file_name = path.display();
     let file_size = data.len();
 
+    // Load session state; create fresh if absent or file changed size.
+    let mut state = session::load(path)
+        .filter(|s| s.file_size == file_size)
+        .unwrap_or_else(|| session::SessionState::new(file_size));
+
     let corpus = corpus::load();
-    let all_signals = signals::extract_all(data, block_size, &corpus);
+    let all_signals = if state.signals.is_empty() {
+        let sigs = signals::extract_all(data, block_size, &corpus);
+        state.signals.clone_from(&sigs);
+        if let Err(e) = session::save(path, &state) {
+            eprintln!("warning: could not save session state: {e}");
+        }
+        sigs
+    } else {
+        state.signals.clone()
+    };
 
     if json {
         println!("{}", serde_json::to_string_pretty(&all_signals)?);
@@ -234,10 +274,31 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
     let bar = "═".repeat(60);
     println!("{bar}");
     println!("  tiltshift  {file_name}  ({file_size} bytes)");
+    if !state.annotations.is_empty() {
+        println!(
+            "  {} user annotation(s)  (sidecar: {}.tiltshift.toml)",
+            state.annotations.len(),
+            file_name
+        );
+    }
     println!("{bar}");
 
     // ── Hypotheses ───────────────────────────────────────────────────────────
-    let schema = hypothesis::build(&all_signals, file_size);
+    let mut schema = hypothesis::build(&all_signals, file_size);
+
+    // Inject user annotations as top-priority hypotheses.
+    for ann in &state.annotations {
+        schema.hypotheses.push(Hypothesis {
+            region: Region::new(ann.offset, ann.len),
+            label: ann.label.clone(),
+            confidence: 1.0,
+            reasoning: String::new(),
+            signals: vec![],
+            alternatives: vec![],
+            annotated: true,
+        });
+    }
+
     const HYP_CAP: usize = 20;
     if !schema.hypotheses.is_empty() {
         println!("\nHYPOTHESES");
@@ -248,14 +309,16 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
             } else {
                 format!("{:10}", hyp.region)
             };
+            let tag = if hyp.annotated { "  [user]" } else { "" };
             println!(
-                "  {}  {}  (confidence {:.0}%)",
+                "  {}  {}{}  (confidence {:.0}%)",
                 region_str,
                 hyp.label,
+                tag,
                 hyp.confidence * 100.0
             );
-            // Reasoning — always shown
-            if !hyp.reasoning.is_empty() {
+            // Reasoning — shown for auto-detected hypotheses only
+            if !hyp.annotated && !hyp.reasoning.is_empty() {
                 println!("              why: {}", hyp.reasoning);
             }
             // Contributing signals summary (only when multiple signals compound)
@@ -300,12 +363,17 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
                 LayoutSpan::Known(hyp) => {
                     let start = hyp.region.offset;
                     let end = hyp.region.end().saturating_sub(1);
+                    let kind = if hyp.annotated {
+                        "ANNOTATED"
+                    } else {
+                        "KNOWN    "
+                    };
                     println!(
-                        "  0x{start:06x}–0x{end:06x}  KNOWN    {} ({:.0}%)",
+                        "  0x{start:06x}–0x{end:06x}  {kind}  {} ({:.0}%)",
                         hyp.label,
                         hyp.confidence * 100.0
                     );
-                    if depth > 0 && hyp.region.len >= MIN_DESCENT_SIZE {
+                    if depth > 0 && hyp.region.len >= MIN_DESCENT_SIZE && !hyp.annotated {
                         let sub_data = hyp.region.slice(data);
                         println!(
                             "      ↳ sub-region 0x{start:06x}+{} (inside: {})",
@@ -1844,6 +1912,51 @@ fn print_numeric_sig(sig: &tiltshift::types::Signal) {
         flags.join(", "),
         sig.confidence * 100.0
     );
+}
+
+fn cmd_annotate(
+    path: &PathBuf,
+    offset_str: &str,
+    len_str: &str,
+    label: &str,
+) -> anyhow::Result<()> {
+    let mapped = MappedFile::open(path)?;
+    let file_size = mapped.bytes().len();
+
+    let offset = parse_offset(offset_str)
+        .ok_or_else(|| anyhow::anyhow!("invalid offset: {offset_str:?}"))?;
+    let len =
+        parse_offset(len_str).ok_or_else(|| anyhow::anyhow!("invalid length: {len_str:?}"))?;
+
+    if len == 0 {
+        anyhow::bail!("annotation length must be greater than zero");
+    }
+    if offset + len > file_size {
+        anyhow::bail!(
+            "annotation range 0x{offset:x}+{len} extends past end of file ({file_size} bytes)"
+        );
+    }
+
+    let mut state = session::load(path)
+        .filter(|s| s.file_size == file_size)
+        .unwrap_or_else(|| session::SessionState::new(file_size));
+
+    // Replace existing annotation for the same region, or add new.
+    state
+        .annotations
+        .retain(|a| !(a.offset == offset && a.len == len));
+    state.annotations.push(session::Annotation {
+        offset,
+        len,
+        label: label.to_string(),
+    });
+
+    session::save(path, &state)?;
+
+    let sidecar = session::sidecar_path(path);
+    println!("annotated  0x{offset:06x}+{len}  \"{label}\"");
+    println!("  saved → {}", sidecar.display());
+    Ok(())
 }
 
 /// 8-cell block bar representing entropy 0.0–8.0.

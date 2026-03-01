@@ -289,6 +289,10 @@ pub struct Hypothesis {
     pub signals: Vec<Signal>,
     /// Alternatives considered and why they ranked lower.
     pub alternatives: Vec<(String, f64)>,
+    /// True when this hypothesis was added by the user via `tiltshift annotate`
+    /// rather than derived automatically from signals.
+    #[serde(default)]
+    pub annotated: bool,
 }
 
 impl Hypothesis {
@@ -300,6 +304,7 @@ impl Hypothesis {
             reasoning: String::new(),
             signals: vec![signal],
             alternatives: vec![],
+            annotated: false,
         }
     }
 }

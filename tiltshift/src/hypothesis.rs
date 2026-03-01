@@ -101,6 +101,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                 "coincidental byte match".to_string(),
                 (sig.confidence * 0.15).min(0.20),
             )],
+            annotated: false,
         }),
 
         SignalKind::ChunkSequence {
@@ -121,6 +122,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                 ),
                 signals: vec![sig.clone()],
                 alternatives: vec![("coincidental length patterns".to_string(), 0.15)],
+                annotated: false,
             })
         }
 
@@ -156,6 +158,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                 ),
                 signals: vec![sig.clone()],
                 alternatives: vec![("coincidental length matches".to_string(), 0.20)],
+                annotated: false,
             })
         }
 
@@ -187,6 +190,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                 ),
                 signals: vec![sig.clone()],
                 alternatives: vec![("coincidental value".to_string(), 0.25)],
+                annotated: false,
             })
         }
 
@@ -205,6 +209,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
             ),
             signals: vec![sig.clone()],
             alternatives: vec![("coincidental repetition".to_string(), 0.20)],
+            annotated: false,
         }),
 
         SignalKind::VarInt {
@@ -250,6 +255,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                 reasoning,
                 signals: vec![sig.clone()],
                 alternatives: vec![alt],
+                annotated: false,
             })
         }
 
@@ -272,6 +278,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                 "coincidental byte-value distribution".to_string(),
                 (1.0 - sig.confidence).max(0.05),
             )],
+            annotated: false,
         }),
 
         SignalKind::NumericValue {
@@ -293,6 +300,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                     ),
                     signals: vec![sig.clone()],
                     alternatives: vec![("coincidental value match".to_string(), 0.20)],
+                    annotated: false,
                 })
             } else if *power_of_two {
                 Some(Hypothesis {
@@ -307,6 +315,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                     ),
                     signals: vec![sig.clone()],
                     alternatives: vec![("arbitrary data value".to_string(), 0.35)],
+                    annotated: false,
                 })
             } else if *within_bounds {
                 Some(Hypothesis {
@@ -321,6 +330,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                     ),
                     signals: vec![sig.clone()],
                     alternatives: vec![("unrelated numeric value".to_string(), 0.45)],
+                    annotated: false,
                 })
             } else {
                 None
@@ -347,6 +357,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                 "coincidental nibble independence".to_string(),
                 0.25,
             )],
+            annotated: false,
         }),
 
         SignalKind::OffsetGraph {
@@ -377,6 +388,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                     "coincidental within-bounds values".to_string(),
                     (1.0_f64 - sig.confidence).max(0.05),
                 )],
+                annotated: false,
             })
         }
 
@@ -476,6 +488,7 @@ fn compound_string_tables(signals: &[Signal]) -> (Vec<Hypothesis>, HashSet<usize
                     "individual strings in binary structure".to_string(),
                     avg_conf,
                 )],
+                annotated: false,
             });
         } else {
             // Runs of 1–2 strings: emit as individual hypotheses.
@@ -495,6 +508,7 @@ fn compound_string_tables(signals: &[Signal]) -> (Vec<Hypothesis>, HashSet<usize
                             "coincidental null byte after printable run".to_string(),
                             (1.0 - sig.confidence) * 0.5,
                         )],
+                        annotated: false,
                     });
                 }
             }
@@ -594,6 +608,7 @@ fn cross_signal_compounds(signals: &[Signal]) -> (Vec<Hypothesis>, HashSet<usize
                 ),
                 signals: vec![ms.clone(), cs.clone()],
                 alternatives: vec![("partial or corrupt file".to_string(), 0.05)],
+                annotated: false,
             });
             consumed.insert(mi);
             consumed.insert(ci);
@@ -656,6 +671,7 @@ fn cross_signal_compounds(signals: &[Signal]) -> (Vec<Hypothesis>, HashSet<usize
                     ),
                     ("MessagePack or CBOR binary protocol".to_string(), 0.15),
                 ],
+                annotated: false,
             });
             consumed.insert(ti);
             consumed.insert(vi);
@@ -722,6 +738,7 @@ fn cross_signal_compounds(signals: &[Signal]) -> (Vec<Hypothesis>, HashSet<usize
                     "coincidental pattern at alignment boundary".to_string(),
                     0.15,
                 )],
+                annotated: false,
             });
             consumed.insert(ri);
             consumed.insert(ai);
@@ -870,6 +887,7 @@ fn file_wide_characterization(signals: &[Signal], file_size: usize) -> Option<Hy
         reasoning,
         signals: contributing,
         alternatives: vec![(alt_label.to_string(), alt_conf)],
+        annotated: false,
     })
 }
 
