@@ -24,7 +24,7 @@
 - [x] Byte frequency histogram — shape indicates data type (DESIGN: Statistical signals)
 - [x] Bigram / trigram frequency tables — discriminate types better than entropy alone; repeated ngrams at fixed stride → struct fields (DESIGN: Statistical signals)
 - [x] Shannon entropy (sliding window, not just point-in-time) — transitions between regions > absolute values (DESIGN: Statistical signals)
-- [ ] Chi-square test for uniformity (DESIGN: Statistical signals)
+- [x] Chi-square test for uniformity (DESIGN: Statistical signals)  ✓ done (`617a3c8`)
 - [ ] Compression ratio probe (try zlib/zstd on a region, measure result) — more honest proxy for randomness than entropy (DESIGN: Statistical signals)
 - [x] Magic byte scanner — 102-entry corpus in data/magic.toml, extensible via `magic add`; detects at non-zero offsets (DESIGN: Structural signals)
 - [x] Null-terminated string scanner — use as structural anchors (DESIGN: Structural signals)
