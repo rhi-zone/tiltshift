@@ -1,3 +1,4 @@
+pub mod constraint;
 pub mod corpus;
 pub mod hypothesis;
 pub mod loader;

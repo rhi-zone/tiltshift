@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tiltshift::{
-    corpus, hypothesis,
+    constraint, corpus, hypothesis,
     loader::MappedFile,
     probe, search, signals,
     signals::{chunk::sequence_label, length_prefix::body_preview, tlv::tlv_label},
@@ -254,6 +254,10 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         let unknown_count = layout.len() - known_count;
         println!("\nLAYOUT  ({file_size} bytes, {known_count} known, {unknown_count} unknown)");
         println!("{}", "─".repeat(60));
+
+        // Derive pointer/offset constraints to annotate unknown spans.
+        let constraints = constraint::propagate(&all_signals);
+
         for span in &layout {
             match span {
                 LayoutSpan::Known(hyp) => {
@@ -269,6 +273,9 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
                     let start = region.offset;
                     let end = region.end().saturating_sub(1);
                     println!("  0x{start:06x}–0x{end:06x}  UNKNOWN  {} B", region.len);
+                    for c in constraint::for_region(&constraints, region) {
+                        println!("                             ← {}", c.note);
+                    }
                 }
             }
         }
