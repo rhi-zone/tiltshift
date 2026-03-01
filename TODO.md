@@ -2,7 +2,7 @@
 
 ## Next up (priority order)
 
-1. **Length-prefixed blob detector** — u8/u16/u32 × LE/BE: value at offset X = N, followed by N bytes of non-null data. Extends string scanner; sets up signal compounding (length-prefix + printable region → "length-prefixed string" hypothesis).
+1. ~~**Length-prefixed blob detector** — u8/u16/u32 × LE/BE~~  ✓ done (`391da57`)
 2. **Chunk pattern detector** — IFF/RIFF/PNG style (4-byte tag + 4-byte length + data, repeating). Lets tiltshift outline WAV/AIFF/PNG/RIFF without knowing the format.
 3. **Numeric value semantics** — scan all u32le/be values, flag: power-of-two, matches file size, within-file-bounds (candidate pointer). Low cost, high signal value; complements `probe` annotations.
 4. **Ngram frequency tables** — bigram/trigram tables; discriminate data types better than entropy alone; repeated ngrams at fixed stride → struct field boundaries.
@@ -27,7 +27,7 @@
 - [ ] Compression ratio probe (try zlib/zstd on a region, measure result) — more honest proxy for randomness than entropy (DESIGN: Statistical signals)
 - [x] Magic byte scanner — 102-entry corpus in data/magic.toml, extensible via `magic add`; detects at non-zero offsets (DESIGN: Structural signals)
 - [x] Null-terminated string scanner — use as structural anchors (DESIGN: Structural signals)
-- [ ] Length-prefixed blob detector (u8/u16/u32 × 3 endiannesses) — especially strong when followed by printable ASCII (DESIGN: Structural signals)
+- [x] Length-prefixed blob detector (u8/u16/u32 × LE/BE) — especially strong when followed by printable ASCII (DESIGN: Structural signals)
 - [ ] Chunk pattern detector (tag + length + data, repeating — IFF/RIFF/PNG style) (DESIGN: Structural signals)
 - [ ] TLV detector (type-length-value, various widths) (DESIGN: Structural signals)
 - [ ] Alignment map (regularity at 2/4/8-byte boundaries) — find struct boundaries (DESIGN: Structural signals)
