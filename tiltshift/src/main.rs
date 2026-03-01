@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use tiltshift::{
     corpus,
     loader::MappedFile,
-    probe, signals,
+    probe, search, signals,
     signals::{chunk::sequence_label, length_prefix::body_preview},
     types::{EntropyClass, SignalKind},
 };
@@ -48,6 +48,24 @@ enum Command {
         #[command(subcommand)]
         action: MagicAction,
     },
+
+    /// Search a file for all occurrences of a byte pattern.
+    ///
+    /// PATTERN is a hex string: space-separated pairs or compact.
+    /// Examples:
+    ///   tiltshift scan data.bin "de ad be ef"
+    ///   tiltshift scan data.bin deadbeef
+    Scan {
+        file: PathBuf,
+        /// Hex bytes to search for (e.g. "89 50 4e 47" or "89504e47").
+        pattern: String,
+        /// Extra bytes of hex context to display after each hit.
+        #[arg(long, default_value_t = 8)]
+        context: usize,
+        /// Output JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -86,6 +104,12 @@ fn main() -> anyhow::Result<()> {
             MagicAction::Add { name, magic } => cmd_magic_add(&name, &magic),
             MagicAction::List { filter } => cmd_magic_list(filter.as_deref()),
         },
+        Command::Scan {
+            file,
+            pattern,
+            context,
+            json,
+        } => cmd_scan(&file, &pattern, context, json),
     }
 }
 
@@ -476,6 +500,79 @@ fn cmd_probe(path: &PathBuf, offset_str: &str, len: usize) -> anyhow::Result<()>
         }
         println!("{}", "─".repeat(60));
     }
+    println!();
+    Ok(())
+}
+
+fn cmd_scan(path: &PathBuf, pattern_str: &str, context: usize, json: bool) -> anyhow::Result<()> {
+    let pattern =
+        corpus::parse_hex(pattern_str).map_err(|e| anyhow::anyhow!("invalid pattern: {e}"))?;
+
+    let mapped = MappedFile::open(path)?;
+    let data = mapped.bytes();
+
+    let hits = search::find_all(data, &pattern);
+
+    if json {
+        let records: Vec<_> = hits
+            .iter()
+            .map(|&offset| {
+                let ctx_end = (offset + pattern.len() + context).min(data.len());
+                let ctx_bytes = &data[offset..ctx_end];
+                let hex: String = ctx_bytes
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                serde_json::json!({ "offset": offset, "hex": hex })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&records)?);
+        return Ok(());
+    }
+
+    let pat_hex: String = pattern
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let bar = "═".repeat(60);
+    println!("{bar}");
+    println!(
+        "  scan  {}  pattern=[{}]  ({} byte{})",
+        path.display(),
+        pat_hex,
+        pattern.len(),
+        if pattern.len() == 1 { "" } else { "s" }
+    );
+    println!("{bar}");
+
+    if hits.is_empty() {
+        println!("  (no matches)");
+    } else {
+        for &offset in &hits {
+            let ctx_start = offset + pattern.len();
+            let ctx_end = ctx_start.saturating_add(context).min(data.len());
+            let ctx_hex: String = if ctx_start < data.len() && context > 0 {
+                let bytes = &data[ctx_start..ctx_end];
+                format!(
+                    "  +{}",
+                    bytes
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            } else {
+                String::new()
+            };
+            println!("  0x{offset:08x}  [{pat_hex}]{ctx_hex}");
+        }
+    }
+
+    println!();
+    println!("  {} hit(s)", hits.len());
     println!();
     Ok(())
 }
