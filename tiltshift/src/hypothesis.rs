@@ -5,6 +5,13 @@
 //!
 //! 1. **Compound string tables** — 3+ adjacent null-terminated strings →
 //!    a single "string table" hypothesis.
+//!    1.5. **Cross-signal compounds** — pairs of reinforcing signals become a
+//!    single higher-confidence hypothesis:
+//!    - MagicBytes + ChunkSequence at the same header offset → confirmed format.
+//!    - TlvSequence(type_width=1) + VarInt(leb128) in overlapping regions →
+//!      protobuf-like encoding.
+//!    - RepeatedPattern + AlignmentHint where stride is a multiple of the
+//!      detected alignment → aligned struct array.
 //! 2. **File-wide characterization** — chi-square, compression ratio, and ngram
 //!    profile combine into a single characterization of the file's overall data
 //!    character (structured, text, encrypted, …).
@@ -27,8 +34,13 @@ pub fn build(signals: &[Signal], file_size: usize) -> PartialSchema {
     }
 
     // Pass 1 — compound string tables
-    let (string_hyps, consumed) = compound_string_tables(signals);
+    let (string_hyps, mut consumed) = compound_string_tables(signals);
     schema.hypotheses.extend(string_hyps);
+
+    // Pass 1.5 — cross-signal compound hypotheses
+    let (compound_hyps, more_consumed) = cross_signal_compounds(signals);
+    schema.hypotheses.extend(compound_hyps);
+    consumed.extend(more_consumed);
 
     // Pass 2 — file-wide statistical characterization
     if let Some(h) = file_wide_characterization(signals, file_size) {
@@ -369,6 +381,228 @@ fn compound_string_tables(signals: &[Signal]) -> (Vec<Hypothesis>, HashSet<usize
     (hypotheses, consumed)
 }
 
+// ── Compound: cross-signal ────────────────────────────────────────────────────
+
+/// Look for pairs of signals that reinforce each other and emit higher-confidence
+/// compound hypotheses.  Signals consumed here are removed from pass 3.
+///
+/// Rules:
+/// - **MagicBytes + ChunkSequence** at the same header offset → confirmed format.
+/// - **TlvSequence(type_width=1) + VarInt(leb128)** in overlapping regions →
+///   protobuf-like encoding.
+/// - **RepeatedPattern + AlignmentHint** where stride is a multiple of the
+///   detected alignment → aligned struct array.
+fn cross_signal_compounds(signals: &[Signal]) -> (Vec<Hypothesis>, HashSet<usize>) {
+    let mut consumed: HashSet<usize> = HashSet::new();
+    let mut hypotheses: Vec<Hypothesis> = Vec::new();
+
+    // Collect indices by kind.
+    let magic_idxs: Vec<usize> = (0..signals.len())
+        .filter(|&i| matches!(signals[i].kind, SignalKind::MagicBytes { .. }))
+        .collect();
+    let chunk_idxs: Vec<usize> = (0..signals.len())
+        .filter(|&i| matches!(signals[i].kind, SignalKind::ChunkSequence { .. }))
+        .collect();
+    let tlv_idxs: Vec<usize> = (0..signals.len())
+        .filter(|&i| matches!(signals[i].kind, SignalKind::TlvSequence { .. }))
+        .collect();
+    let varint_leb_idxs: Vec<usize> = (0..signals.len())
+        .filter(|&i| {
+            matches!(&signals[i].kind, SignalKind::VarInt { encoding, .. } if encoding == "leb128-unsigned")
+        })
+        .collect();
+    let repeated_idxs: Vec<usize> = (0..signals.len())
+        .filter(|&i| matches!(signals[i].kind, SignalKind::RepeatedPattern { .. }))
+        .collect();
+    let align_idxs: Vec<usize> = (0..signals.len())
+        .filter(|&i| matches!(signals[i].kind, SignalKind::AlignmentHint { .. }))
+        .collect();
+
+    // ── Rule 1: MagicBytes + ChunkSequence → confirmed format ────────────────
+    //
+    // The chunk structure must start at or just after the magic bytes (≤ 16 B),
+    // and the magic must be in the file header (offset < 64).
+    for &mi in &magic_idxs {
+        if consumed.contains(&mi) {
+            continue;
+        }
+        let ms = &signals[mi];
+        let SignalKind::MagicBytes { format, .. } = &ms.kind else {
+            continue;
+        };
+        if ms.region.offset >= 64 {
+            continue;
+        }
+
+        let best_ci = chunk_idxs
+            .iter()
+            .filter(|&&ci| {
+                !consumed.contains(&ci) && {
+                    let cs = &signals[ci];
+                    cs.region.offset >= ms.region.offset
+                        && cs.region.offset - ms.region.offset <= 16
+                }
+            })
+            .max_by(|&&a, &&b| {
+                signals[a]
+                    .confidence
+                    .partial_cmp(&signals[b].confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .copied();
+
+        if let Some(ci) = best_ci {
+            let cs = &signals[ci];
+            let SignalKind::ChunkSequence { chunk_count, .. } = &cs.kind else {
+                continue;
+            };
+            let conf = (ms.confidence.max(cs.confidence) + 0.05).min(0.98);
+            hypotheses.push(Hypothesis {
+                region: region_union(&ms.region, &cs.region),
+                label: format!(
+                    "Confirmed {format} container — magic header + {chunk_count} chunks"
+                ),
+                confidence: conf,
+                signals: vec![ms.clone(), cs.clone()],
+                alternatives: vec![("partial or corrupt file".to_string(), 0.05)],
+            });
+            consumed.insert(mi);
+            consumed.insert(ci);
+        }
+    }
+
+    // ── Rule 2: TlvSequence(type_width=1) + VarInt(leb128) → protobuf-like ──
+    //
+    // Protobuf encodes field tags as LEB128 varints (low 3 bits = wire type,
+    // upper bits = field number), so a 1-byte-tag TLV stream co-located with a
+    // LEB128 run is a strong protobuf (or protobuf-compatible) indicator.
+    for &ti in &tlv_idxs {
+        if consumed.contains(&ti) {
+            continue;
+        }
+        let ts = &signals[ti];
+        let SignalKind::TlvSequence {
+            type_width,
+            record_count,
+            ..
+        } = &ts.kind
+        else {
+            continue;
+        };
+        if *type_width != 1 {
+            continue;
+        }
+
+        let best_vi = varint_leb_idxs
+            .iter()
+            .filter(|&&vi| {
+                !consumed.contains(&vi) && regions_overlap(&ts.region, &signals[vi].region)
+            })
+            .max_by(|&&a, &&b| {
+                signals[a]
+                    .confidence
+                    .partial_cmp(&signals[b].confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .copied();
+
+        if let Some(vi) = best_vi {
+            let vs = &signals[vi];
+            let conf = (ts.confidence.max(vs.confidence) + 0.08).min(0.90);
+            hypotheses.push(Hypothesis {
+                region: region_union(&ts.region, &vs.region),
+                label: format!(
+                    "Protobuf-like encoding — TLV field tags + LEB128 values ({record_count} records)"
+                ),
+                confidence: conf,
+                signals: vec![ts.clone(), vs.clone()],
+                alternatives: vec![
+                    (
+                        "custom TLV with incidental LEB128 data".to_string(),
+                        0.20,
+                    ),
+                    ("MessagePack or CBOR binary protocol".to_string(), 0.15),
+                ],
+            });
+            consumed.insert(ti);
+            consumed.insert(vi);
+        }
+    }
+
+    // ── Rule 3: RepeatedPattern + AlignmentHint → aligned struct array ───────
+    //
+    // When a repeated stride is an even multiple of the detected field alignment,
+    // the two signals corroborate each other: the data is almost certainly an
+    // array of structs laid out at aligned boundaries.
+    for &ri in &repeated_idxs {
+        if consumed.contains(&ri) {
+            continue;
+        }
+        let rs = &signals[ri];
+        let SignalKind::RepeatedPattern {
+            stride,
+            occurrences,
+            ..
+        } = &rs.kind
+        else {
+            continue;
+        };
+
+        let best_ai = align_idxs
+            .iter()
+            .filter(|&&ai| {
+                !consumed.contains(&ai) && {
+                    if let SignalKind::AlignmentHint { alignment, .. } = &signals[ai].kind {
+                        stride.is_multiple_of(*alignment)
+                    } else {
+                        false
+                    }
+                }
+            })
+            .max_by(|&&a, &&b| {
+                signals[a]
+                    .confidence
+                    .partial_cmp(&signals[b].confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .copied();
+
+        if let Some(ai) = best_ai {
+            let als = &signals[ai];
+            let SignalKind::AlignmentHint { alignment, .. } = &als.kind else {
+                continue;
+            };
+            let conf = (rs.confidence.max(als.confidence) + 0.07).min(0.92);
+            hypotheses.push(Hypothesis {
+                region: rs.region.clone(),
+                label: format!(
+                    "Struct array — {occurrences}× {stride}-byte records, {alignment}-byte aligned"
+                ),
+                confidence: conf,
+                signals: vec![rs.clone(), als.clone()],
+                alternatives: vec![(
+                    "coincidental pattern at alignment boundary".to_string(),
+                    0.15,
+                )],
+            });
+            consumed.insert(ri);
+            consumed.insert(ai);
+        }
+    }
+
+    (hypotheses, consumed)
+}
+
+fn regions_overlap(a: &Region, b: &Region) -> bool {
+    a.offset < b.end() && b.offset < a.end()
+}
+
+fn region_union(a: &Region, b: &Region) -> Region {
+    let start = a.offset.min(b.offset);
+    let end = a.end().max(b.end());
+    Region::new(start, end - start)
+}
+
 // ── Compound: file-wide characterization ─────────────────────────────────────
 
 /// Combine chi-square, compression ratio, and ngram profile into a single
@@ -607,6 +841,153 @@ mod tests {
             .find(|h| h.region.len == 1024)
             .expect("file-wide hypothesis not found");
         assert!(fw.label.contains("structured"), "label: {}", fw.label);
+    }
+
+    #[test]
+    fn magic_plus_chunk_compounded_into_confirmed_format() {
+        let magic = Signal::new(
+            Region::new(0, 8),
+            SignalKind::MagicBytes {
+                format: "PNG".to_string(),
+                hex: "89504e47".to_string(),
+            },
+            0.97,
+            "test",
+        );
+        let chunk = Signal::new(
+            Region::new(8, 512),
+            SignalKind::ChunkSequence {
+                format_hint: "PNG".to_string(),
+                tag_first: false,
+                little_endian: false,
+                chunk_count: 4,
+                tags: vec!["IHDR".to_string(), "IDAT".to_string(), "IEND".to_string()],
+            },
+            0.90,
+            "test",
+        );
+        let schema = build(&[magic, chunk], 520);
+        let compound = schema
+            .hypotheses
+            .iter()
+            .find(|h| h.label.contains("Confirmed") && h.label.contains("PNG"))
+            .expect("compound format hypothesis not found");
+        assert!(compound.confidence >= 0.97, "conf={}", compound.confidence);
+        assert_eq!(compound.signals.len(), 2);
+        // Neither signal should appear again as a standalone hypothesis.
+        assert!(!schema
+            .hypotheses
+            .iter()
+            .any(|h| h.label.contains("Known format: PNG")));
+    }
+
+    #[test]
+    fn tlv_plus_varint_compounded_into_protobuf_like() {
+        let tlv = Signal::new(
+            Region::new(0, 200),
+            SignalKind::TlvSequence {
+                type_width: 1,
+                len_width: 1,
+                little_endian: true,
+                record_count: 12,
+                type_samples: vec![1, 2, 3],
+            },
+            0.75,
+            "test",
+        );
+        let varint = Signal::new(
+            Region::new(0, 180),
+            SignalKind::VarInt {
+                encoding: "leb128-unsigned".to_string(),
+                count: 8,
+                bytes_consumed: 24,
+                avg_width: 2.1,
+            },
+            0.70,
+            "test",
+        );
+        let schema = build(&[tlv, varint], 200);
+        let compound = schema
+            .hypotheses
+            .iter()
+            .find(|h| h.label.contains("Protobuf-like"))
+            .expect("protobuf-like hypothesis not found");
+        assert!(compound.confidence > 0.75, "conf={}", compound.confidence);
+        assert_eq!(compound.signals.len(), 2);
+    }
+
+    #[test]
+    fn repeated_plus_alignment_compounded_into_struct_array() {
+        let rep = Signal::new(
+            Region::new(0, 256),
+            SignalKind::RepeatedPattern {
+                pattern: vec![0x00, 0x00, 0x00, 0x00],
+                stride: 8,
+                occurrences: 32,
+            },
+            0.78,
+            "test",
+        );
+        let align = Signal::new(
+            Region::new(0, 256),
+            SignalKind::AlignmentHint {
+                alignment: 4,
+                entropy_spread: 1.2,
+                dominant_phase: 0,
+            },
+            0.72,
+            "test",
+        );
+        let schema = build(&[rep, align], 256);
+        let compound = schema
+            .hypotheses
+            .iter()
+            .find(|h| h.label.contains("Struct array"))
+            .expect("struct array hypothesis not found");
+        assert!(
+            compound.label.contains("8-byte"),
+            "label: {}",
+            compound.label
+        );
+        assert!(
+            compound.label.contains("4-byte"),
+            "label: {}",
+            compound.label
+        );
+        assert_eq!(compound.signals.len(), 2);
+    }
+
+    #[test]
+    fn incompatible_stride_does_not_compound() {
+        // stride=6 is not a multiple of alignment=4, so no compound.
+        let rep = Signal::new(
+            Region::new(0, 256),
+            SignalKind::RepeatedPattern {
+                pattern: vec![0xDE, 0xAD, 0xBE, 0xEF],
+                stride: 6,
+                occurrences: 20,
+            },
+            0.78,
+            "test",
+        );
+        let align = Signal::new(
+            Region::new(0, 256),
+            SignalKind::AlignmentHint {
+                alignment: 4,
+                entropy_spread: 1.0,
+                dominant_phase: 0,
+            },
+            0.72,
+            "test",
+        );
+        let schema = build(&[rep, align], 256);
+        assert!(
+            !schema
+                .hypotheses
+                .iter()
+                .any(|h| h.label.contains("Struct array")),
+            "should not compound when stride is not a multiple of alignment"
+        );
     }
 
     #[test]
