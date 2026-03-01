@@ -4,7 +4,7 @@
 
 1. ~~**Length-prefixed blob detector** — u8/u16/u32 × LE/BE~~  ✓ done (`391da57`)
 2. ~~**Chunk pattern detector** — IFF/RIFF/PNG style~~  ✓ done (`e220de7`)
-3. **Numeric value semantics** — scan all u32le/be values, flag: power-of-two, matches file size, within-file-bounds (candidate pointer). Low cost, high signal value; complements `probe` annotations.
+3. ~~**Numeric value semantics** — scan all u32le/be values~~  ✓ done (`d88f92e`)
 4. **Ngram frequency tables** — bigram/trigram tables; discriminate data types better than entropy alone; repeated ngrams at fixed stride → struct field boundaries.
 
 ## Foundation
@@ -32,7 +32,7 @@
 - [ ] TLV detector (type-length-value, various widths) (DESIGN: Structural signals)
 - [ ] Alignment map (regularity at 2/4/8-byte boundaries) — find struct boundaries (DESIGN: Structural signals)
 - [ ] Repetition / stride detector (find arrays of structs) (DESIGN: Structural signals)
-- [ ] Numeric value semantics (high bits zero, power of two, matches file size, within-bounds pointer) (DESIGN: Numeric value semantics)
+- [x] Numeric value semantics (power of two, matches file size, within-bounds pointer in header region) (DESIGN: Numeric value semantics)
 - [ ] Padding detector (runs of 0x00 or 0xFF) (DESIGN: Numeric value semantics)
 - [ ] Pointer / offset graph builder — render as graph; pointer chasing should be automatic (DESIGN: Pointer / offset graph)
 - [ ] Variable-length integer encoding detector (LEB128, UTF-8 continuation) (DESIGN: Bit-level signals)
