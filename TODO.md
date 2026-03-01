@@ -5,7 +5,7 @@
 1. ~~**Length-prefixed blob detector** — u8/u16/u32 × LE/BE~~  ✓ done (`391da57`)
 2. ~~**Chunk pattern detector** — IFF/RIFF/PNG style~~  ✓ done (`e220de7`)
 3. ~~**Numeric value semantics** — scan all u32le/be values~~  ✓ done (`d88f92e`)
-4. **Ngram frequency tables** — bigram/trigram tables; discriminate data types better than entropy alone; repeated ngrams at fixed stride → struct field boundaries.
+4. ~~**Ngram frequency tables** — bigram/trigram tables~~  ✓ done (`cbcb64e`)
 
 ## Foundation
 
@@ -21,7 +21,7 @@
 <!-- Full taxonomy in DESIGN.md § Signal taxonomy — statistical, structural, numeric, pointer/offset, bit-level, multi-file -->
 
 - [x] Byte frequency histogram — shape indicates data type (DESIGN: Statistical signals)
-- [ ] Bigram / trigram frequency tables — discriminate types better than entropy alone; repeated ngrams at fixed stride → struct fields (DESIGN: Statistical signals)
+- [x] Bigram / trigram frequency tables — discriminate types better than entropy alone; repeated ngrams at fixed stride → struct fields (DESIGN: Statistical signals)
 - [x] Shannon entropy (sliding window, not just point-in-time) — transitions between regions > absolute values (DESIGN: Statistical signals)
 - [ ] Chi-square test for uniformity (DESIGN: Statistical signals)
 - [ ] Compression ratio probe (try zlib/zstd on a region, measure result) — more honest proxy for randomness than entropy (DESIGN: Statistical signals)
