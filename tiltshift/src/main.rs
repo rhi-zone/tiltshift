@@ -386,6 +386,44 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         }
     }
 
+    let padding_runs: Vec<_> = all_signals
+        .iter()
+        .filter(|s| matches!(&s.kind, SignalKind::Padding { .. }))
+        .collect();
+
+    if !padding_runs.is_empty() {
+        println!("\nPADDING RUNS");
+        println!("{}", "─".repeat(60));
+        const PADDING_DISPLAY_CAP: usize = 16;
+        for sig in padding_runs.iter().take(PADDING_DISPLAY_CAP) {
+            let SignalKind::Padding {
+                byte_value,
+                run_len,
+            } = &sig.kind
+            else {
+                unreachable!()
+            };
+            let label = if *byte_value == 0x00 {
+                "zero-fill"
+            } else {
+                "0xFF-fill"
+            };
+            println!(
+                "  {:8}  {} ×{}  (confidence {:.0}%)",
+                sig.region.to_string(),
+                label,
+                run_len,
+                sig.confidence * 100.0
+            );
+        }
+        if padding_runs.len() > PADDING_DISPLAY_CAP {
+            println!(
+                "  … {} more (use --json for full list)",
+                padding_runs.len() - PADDING_DISPLAY_CAP
+            );
+        }
+    }
+
     let entropy_blocks: Vec<_> = all_signals
         .iter()
         .filter(|s| matches!(&s.kind, SignalKind::EntropyBlock { .. }))
@@ -416,6 +454,7 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
     println!("  {} chunk sequence(s)", chunk_seqs.len());
     println!("  {} numeric landmark(s)", numeric_vals.len());
     println!("  {} repeating stride pattern(s)", stride_sigs.len());
+    println!("  {} padding run(s)", padding_runs.len());
     println!("  {} entropy block(s)", entropy_blocks.len());
 
     let high_entropy_bytes: usize = entropy_blocks
