@@ -46,7 +46,7 @@
 - [x] Signal → hypothesis conversion with confidence scoring  ✓ done (`hypothesis.rs`)
 - [x] Signal compounding: weak signals accumulate into stronger hypotheses — MagicBytes+ChunkSequence → confirmed format; TLV+LEB128 → protobuf-like; RepeatedPattern+AlignmentHint → aligned struct array  ✓ done (`f4245b2`)
 - [ ] `what_could_this_be(offset, len)` — ranked interpretations with reasoning (DESIGN: Primitive API)
-- [ ] Explanation generation: every hypothesis explains its contributing signals and alternatives considered (DESIGN: Output quality)
+- [x] Explanation generation: every hypothesis explains its contributing signals and alternatives considered (DESIGN: Output quality)  ✓ done (`6564112`)
 
 ## Iterative refinement
 

@@ -304,6 +304,14 @@ impl Hypothesis {
     }
 }
 
+/// A single entry in the linear layout view of a file.
+pub enum LayoutSpan<'a> {
+    /// A region covered by a known hypothesis.
+    Known(&'a Hypothesis),
+    /// A region not covered by any local hypothesis.
+    Unknown(Region),
+}
+
 /// The current state of understanding of the file — some regions explained, others not.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PartialSchema {
@@ -341,5 +349,56 @@ impl PartialSchema {
             gaps.push(Region::new(pos, self.file_size - pos));
         }
         gaps
+    }
+
+    /// Linear layout of the file as a sequence of known and unknown spans.
+    ///
+    /// File-wide hypotheses (those covering the entire file) are excluded — they
+    /// would collapse all unknown spans and make the layout useless.  Among
+    /// remaining hypotheses, earlier offsets take precedence; ties are broken by
+    /// confidence (higher wins).  Gaps between known spans become `Unknown`.
+    pub fn layout(&self) -> Vec<LayoutSpan<'_>> {
+        // Collect local (non-file-wide) hypotheses sorted by (offset asc, confidence desc).
+        let mut local: Vec<&Hypothesis> = self
+            .hypotheses
+            .iter()
+            .filter(|h| h.region.len < self.file_size)
+            .collect();
+        local.sort_by(|a, b| {
+            a.region.offset.cmp(&b.region.offset).then_with(|| {
+                b.confidence
+                    .partial_cmp(&a.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        });
+
+        let mut spans: Vec<LayoutSpan<'_>> = Vec::new();
+        let mut cursor: usize = 0;
+
+        for hyp in local {
+            if hyp.region.offset < cursor {
+                // Overlaps with an already-placed span — skip.
+                continue;
+            }
+            // Fill any gap before this hypothesis.
+            if hyp.region.offset > cursor {
+                spans.push(LayoutSpan::Unknown(Region::new(
+                    cursor,
+                    hyp.region.offset - cursor,
+                )));
+            }
+            cursor = hyp.region.end();
+            spans.push(LayoutSpan::Known(hyp));
+        }
+
+        // Trailing unknown.
+        if cursor < self.file_size {
+            spans.push(LayoutSpan::Unknown(Region::new(
+                cursor,
+                self.file_size - cursor,
+            )));
+        }
+
+        spans
     }
 }

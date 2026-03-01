@@ -5,7 +5,7 @@ use tiltshift::{
     loader::MappedFile,
     probe, search, signals,
     signals::{chunk::sequence_label, length_prefix::body_preview, tlv::tlv_label},
-    types::{EntropyClass, SignalKind},
+    types::{EntropyClass, LayoutSpan, SignalKind},
 };
 
 #[derive(Parser)]
@@ -186,6 +186,36 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
                 "  … {} more (use --json for full list)",
                 schema.hypotheses.len() - HYP_CAP
             );
+        }
+    }
+
+    // LAYOUT — linear view of which byte ranges are explained vs. unknown.
+    let layout = schema.layout();
+    let known_count = layout
+        .iter()
+        .filter(|s| matches!(s, LayoutSpan::Known(_)))
+        .count();
+    if known_count > 0 {
+        let unknown_count = layout.len() - known_count;
+        println!("\nLAYOUT  ({file_size} bytes, {known_count} known, {unknown_count} unknown)");
+        println!("{}", "─".repeat(60));
+        for span in &layout {
+            match span {
+                LayoutSpan::Known(hyp) => {
+                    let start = hyp.region.offset;
+                    let end = hyp.region.end().saturating_sub(1);
+                    println!(
+                        "  0x{start:06x}–0x{end:06x}  KNOWN    {} ({:.0}%)",
+                        hyp.label,
+                        hyp.confidence * 100.0
+                    );
+                }
+                LayoutSpan::Unknown(region) => {
+                    let start = region.offset;
+                    let end = region.end().saturating_sub(1);
+                    println!("  0x{start:06x}–0x{end:06x}  UNKNOWN  {} B", region.len);
+                }
+            }
         }
     }
 
