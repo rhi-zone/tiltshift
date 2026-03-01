@@ -43,7 +43,7 @@
 
 <!-- Differentiator is feedback richness: what was found, confidence + contributing signals, why, alternatives considered, what remains (DESIGN.md § Output quality) -->
 
-- [ ] Signal → hypothesis conversion with confidence scoring
+- [x] Signal → hypothesis conversion with confidence scoring  ✓ done (`hypothesis.rs`)
 - [ ] Signal compounding: weak signals accumulate into stronger hypotheses — "maybe length" + "consistent following region" + "ngram match" → confident hypothesis, not three separate weak guesses (DESIGN: Output quality)
 - [ ] `what_could_this_be(offset, len)` — ranked interpretations with reasoning (DESIGN: Primitive API)
 - [ ] Explanation generation: every hypothesis explains its contributing signals and alternatives considered (DESIGN: Output quality)

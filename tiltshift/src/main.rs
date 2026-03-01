@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tiltshift::{
-    corpus,
+    corpus, hypothesis,
     loader::MappedFile,
     probe, search, signals,
     signals::{chunk::sequence_label, length_prefix::body_preview, tlv::tlv_label},
@@ -143,6 +143,47 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
     println!("{bar}");
     println!("  tiltshift  {file_name}  ({file_size} bytes)");
     println!("{bar}");
+
+    // ── Hypotheses ───────────────────────────────────────────────────────────
+    let schema = hypothesis::build(&all_signals, file_size);
+    const HYP_CAP: usize = 20;
+    if !schema.hypotheses.is_empty() {
+        println!("\nHYPOTHESES");
+        println!("{}", "─".repeat(60));
+        for hyp in schema.hypotheses.iter().take(HYP_CAP) {
+            let region_str = if hyp.region.offset == 0 && hyp.region.len == file_size {
+                "[file]    ".to_string()
+            } else {
+                format!("{:10}", hyp.region)
+            };
+            println!(
+                "  {}  {}  (confidence {:.0}%)",
+                region_str,
+                hyp.label,
+                hyp.confidence * 100.0
+            );
+            // Contributing signals summary (only when multiple signals compound)
+            if hyp.signals.len() > 1 {
+                let desc = hyp
+                    .signals
+                    .iter()
+                    .map(|s| hypothesis::signal_kind_label(&s.kind))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("              contributing: {desc}");
+            }
+            // Top alternative
+            if let Some((alt_label, alt_conf)) = hyp.alternatives.first() {
+                println!("              alt: {alt_label} ({:.0}%)", alt_conf * 100.0);
+            }
+        }
+        if schema.hypotheses.len() > HYP_CAP {
+            println!(
+                "  … {} more (use --json for full list)",
+                schema.hypotheses.len() - HYP_CAP
+            );
+        }
+    }
 
     let magic: Vec<_> = all_signals
         .iter()

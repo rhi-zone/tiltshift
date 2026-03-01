@@ -1,4 +1,5 @@
 pub mod corpus;
+pub mod hypothesis;
 pub mod loader;
 pub mod probe;
 pub mod search;
