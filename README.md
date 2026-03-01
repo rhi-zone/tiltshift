@@ -8,7 +8,7 @@ useful for reverse engineering unknown formats, validating known ones, detecting
 
 ## Status
 
-Early scaffolding. No implementation yet.
+Active development. Signal extraction layer is functional (13 extractors). Hypothesis engine is next.
 
 ## Links
 
