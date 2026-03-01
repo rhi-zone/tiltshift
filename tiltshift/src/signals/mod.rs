@@ -2,6 +2,7 @@ pub mod chunk;
 pub mod entropy;
 pub mod length_prefix;
 pub mod magic;
+pub mod numeric;
 pub mod strings;
 
 use crate::corpus::Corpus;
@@ -16,6 +17,7 @@ pub fn extract_all(data: &[u8], entropy_block_size: usize, corpus: &Corpus) -> V
     signals.extend(strings::scan_null_terminated(data));
     signals.extend(length_prefix::scan_length_prefixed(data));
     signals.extend(chunk::scan_chunks(data));
+    signals.extend(numeric::scan_numeric_landmarks(data));
     signals.extend(entropy::entropy_map(
         data,
         entropy_block_size,

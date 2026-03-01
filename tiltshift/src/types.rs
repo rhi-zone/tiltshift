@@ -133,6 +133,20 @@ pub enum SignalKind {
         /// Fraction of body bytes that are printable ASCII (0.0–1.0).
         printable_ratio: f64,
     },
+    /// A u32 value with structural significance (power-of-two, file-size match,
+    /// or a plausible in-bounds offset found in the header region).
+    NumericValue {
+        /// Byte order used to read this value.
+        little_endian: bool,
+        /// The raw u32 value.
+        value: u32,
+        /// Value equals the file's total byte count.
+        file_size_match: bool,
+        /// Value is a power of two ≥ 16.
+        power_of_two: bool,
+        /// Value is a plausible file offset (in-bounds, 4-byte aligned, header region).
+        within_bounds: bool,
+    },
 }
 
 /// A ranked interpretation built from one or more signals.

@@ -234,6 +234,74 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         }
     }
 
+    let numeric_vals: Vec<_> = all_signals
+        .iter()
+        .filter(|s| matches!(&s.kind, SignalKind::NumericValue { .. }))
+        .collect();
+
+    if !numeric_vals.is_empty() {
+        // Partition by primary flag for display; show most-specific first.
+        let size_hits: Vec<_> = numeric_vals
+            .iter()
+            .filter(|s| {
+                matches!(
+                    &s.kind,
+                    SignalKind::NumericValue {
+                        file_size_match: true,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        let pow2_hits: Vec<_> = numeric_vals
+            .iter()
+            .filter(|s| {
+                matches!(
+                    &s.kind,
+                    SignalKind::NumericValue {
+                        file_size_match: false,
+                        power_of_two: true,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        let offset_hits: Vec<_> = numeric_vals
+            .iter()
+            .filter(|s| {
+                matches!(
+                    &s.kind,
+                    SignalKind::NumericValue {
+                        file_size_match: false,
+                        power_of_two: false,
+                        within_bounds: true,
+                        ..
+                    }
+                )
+            })
+            .collect();
+
+        println!("\nNUMERIC VALUE LANDMARKS");
+        println!("{}", "─".repeat(60));
+
+        for sig in &size_hits {
+            print_numeric_sig(sig);
+        }
+        for sig in &pow2_hits {
+            print_numeric_sig(sig);
+        }
+        const OFFSET_DISPLAY_CAP: usize = 12;
+        for sig in offset_hits.iter().take(OFFSET_DISPLAY_CAP) {
+            print_numeric_sig(sig);
+        }
+        if offset_hits.len() > OFFSET_DISPLAY_CAP {
+            println!(
+                "  … {} more candidate-offset values (use --json for full list)",
+                offset_hits.len() - OFFSET_DISPLAY_CAP
+            );
+        }
+    }
+
     let entropy_blocks: Vec<_> = all_signals
         .iter()
         .filter(|s| matches!(&s.kind, SignalKind::EntropyBlock { .. }))
@@ -262,6 +330,7 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
     println!("  {} null-terminated string(s)", strings.len());
     println!("  {} length-prefixed blob(s)", len_prefixed.len());
     println!("  {} chunk sequence(s)", chunk_seqs.len());
+    println!("  {} numeric landmark(s)", numeric_vals.len());
     println!("  {} entropy block(s)", entropy_blocks.len());
 
     let high_entropy_bytes: usize = entropy_blocks
@@ -408,6 +477,39 @@ fn cmd_magic_list(filter: Option<&str>) -> anyhow::Result<()> {
     }
     println!();
     Ok(())
+}
+
+fn print_numeric_sig(sig: &tiltshift::types::Signal) {
+    let SignalKind::NumericValue {
+        little_endian,
+        value,
+        file_size_match,
+        power_of_two,
+        within_bounds,
+    } = &sig.kind
+    else {
+        unreachable!()
+    };
+    let endian = if *little_endian { "le" } else { "be" };
+    let mut flags = Vec::new();
+    if *file_size_match {
+        flags.push("file-size");
+    }
+    if *power_of_two {
+        flags.push("power-of-two");
+    }
+    if *within_bounds {
+        flags.push("candidate-offset");
+    }
+    println!(
+        "  {:8}  u32{}  {:10}  (0x{:08x})  ← {}  (confidence {:.0}%)",
+        sig.region.to_string(),
+        endian,
+        value,
+        value,
+        flags.join(", "),
+        sig.confidence * 100.0
+    );
 }
 
 /// 8-cell block bar representing entropy 0.0–8.0.
