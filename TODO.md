@@ -32,7 +32,7 @@
 - [x] Chunk pattern detector (tag + length + data, repeating — IFF/RIFF/PNG style) (DESIGN: Structural signals)
 - [x] TLV detector (type-length-value, various widths) (DESIGN: Structural signals)
 - [x] Alignment map (regularity at 2/4/8-byte boundaries) — find struct boundaries (DESIGN: Structural signals)
-- [ ] Repetition / stride detector (find arrays of structs) (DESIGN: Structural signals)
+- [x] Repetition / stride detector (find arrays of structs) (DESIGN: Structural signals)  ✓ done (covered by `ngram.rs` stride_patterns → `RepeatedPattern`)
 - [x] Numeric value semantics (power of two, matches file size, within-bounds pointer in header region) (DESIGN: Numeric value semantics)
 - [x] Padding detector (runs of 0x00 or 0xFF) (DESIGN: Numeric value semantics)
 - [x] Pointer / offset graph builder — render as graph; pointer chasing should be automatic (DESIGN: Pointer / offset graph)  ✓ done
@@ -45,7 +45,7 @@
 
 - [x] Signal → hypothesis conversion with confidence scoring  ✓ done (`hypothesis.rs`)
 - [x] Signal compounding: weak signals accumulate into stronger hypotheses — MagicBytes+ChunkSequence → confirmed format; TLV+LEB128 → protobuf-like; RepeatedPattern+AlignmentHint → aligned struct array  ✓ done (`f4245b2`)
-- [ ] `what_could_this_be(offset, len)` — ranked interpretations with reasoning (DESIGN: Primitive API)
+- [x] `what_could_this_be(offset, len)` — ranked interpretations with reasoning (DESIGN: Primitive API)  ✓ done (`tiltshift region <file> <offset> <len>`)
 - [x] Explanation generation: every hypothesis explains its contributing signals and alternatives considered (DESIGN: Output quality)  ✓ done (`6564112`)
 
 ## Iterative refinement

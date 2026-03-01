@@ -77,6 +77,26 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+
+    /// Show ranked interpretations of a specific byte range.
+    ///
+    /// OFFSET and LEN may be decimal or hex (0x…).
+    /// Examples:
+    ///   tiltshift region data.bin 0x40 64
+    ///   tiltshift region data.bin 128 256
+    Region {
+        file: PathBuf,
+        /// Byte offset to start analysis (decimal or 0x hex).
+        offset: String,
+        /// Number of bytes to analyze (decimal or 0x hex).
+        len: String,
+        /// Entropy block size in bytes (default: 256).
+        #[arg(long, default_value_t = 256)]
+        block_size: usize,
+        /// Output JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -122,6 +142,13 @@ fn main() -> anyhow::Result<()> {
             json,
         } => cmd_scan(&file, &pattern, context, json),
         Command::Obfuscate { file, force } => cmd_obfuscate(&file, force),
+        Command::Region {
+            file,
+            offset,
+            len,
+            block_size,
+            json,
+        } => cmd_region(&file, &offset, &len, block_size, json),
     }
 }
 
@@ -1044,6 +1071,119 @@ fn cmd_obfuscate(path: &PathBuf, force: bool) -> anyhow::Result<()> {
 
     println!();
     println!("  output: {}", out_path.display());
+    println!();
+    Ok(())
+}
+
+fn cmd_region(
+    path: &PathBuf,
+    offset_str: &str,
+    len_str: &str,
+    block_size: usize,
+    json: bool,
+) -> anyhow::Result<()> {
+    let mapped = MappedFile::open(path)?;
+    let data = mapped.bytes();
+    let file_size = data.len();
+
+    let base = parse_offset(offset_str)
+        .ok_or_else(|| anyhow::anyhow!("invalid offset: {offset_str:?}"))?;
+    let requested_len =
+        parse_offset(len_str).ok_or_else(|| anyhow::anyhow!("invalid length: {len_str:?}"))?;
+
+    if base >= file_size {
+        anyhow::bail!("offset 0x{base:x} is beyond end of file ({file_size} bytes)");
+    }
+    if requested_len == 0 {
+        anyhow::bail!("length must be greater than zero");
+    }
+    let len = requested_len.min(file_size - base);
+
+    let slice = &data[base..base + len];
+    let corpus = corpus::load();
+    let all_signals = signals::extract_all(slice, block_size, &corpus);
+    let schema = hypothesis::build(&all_signals, slice.len());
+
+    if json {
+        let output = serde_json::json!({
+            "file": path.display().to_string(),
+            "offset": base,
+            "len": len,
+            "hypotheses": schema.hypotheses,
+            "signals": all_signals,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    let file_name = path.display();
+    let bar = "═".repeat(60);
+    println!("{bar}");
+    println!("  tiltshift region  {file_name}  0x{base:06x}+{len}  ({len} bytes)");
+    println!("{bar}");
+
+    if schema.hypotheses.is_empty() {
+        println!("\n  (no hypotheses — region may be too small or featureless)");
+    } else {
+        println!("\nHYPOTHESES");
+        println!("{}", "─".repeat(60));
+        const HYP_CAP: usize = 10;
+        for hyp in schema.hypotheses.iter().take(HYP_CAP) {
+            // Display file-absolute offsets.
+            let region_str = if hyp.region.offset == 0 && hyp.region.len == len {
+                "[region]  ".to_string()
+            } else {
+                let abs = base + hyp.region.offset;
+                format!("0x{abs:06x}+{}", hyp.region.len)
+            };
+            println!(
+                "  {}  {}  (confidence {:.0}%)",
+                region_str,
+                hyp.label,
+                hyp.confidence * 100.0
+            );
+            if !hyp.reasoning.is_empty() {
+                println!("              why: {}", hyp.reasoning);
+            }
+            if hyp.signals.len() > 1 {
+                let desc = hyp
+                    .signals
+                    .iter()
+                    .map(|s| hypothesis::signal_kind_label(&s.kind))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("              via: {desc}");
+            }
+            if let Some((alt_label, alt_conf)) = hyp.alternatives.first() {
+                println!("              alt: {alt_label} ({:.0}%)", alt_conf * 100.0);
+            }
+        }
+        if schema.hypotheses.len() > HYP_CAP {
+            println!(
+                "  … {} more (use --json for full list)",
+                schema.hypotheses.len() - HYP_CAP
+            );
+        }
+    }
+
+    // Brief signal summary.
+    if !all_signals.is_empty() {
+        println!("\nSIGNALS  ({} total)", all_signals.len());
+        println!("{}", "─".repeat(60));
+        let mut kind_counts: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for sig in &all_signals {
+            *kind_counts
+                .entry(hypothesis::signal_kind_label(&sig.kind))
+                .or_default() += 1;
+        }
+        let mut counts: Vec<_> = kind_counts.into_iter().collect();
+        counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        for (label, count) in &counts {
+            println!("  {count:3}  {label}");
+        }
+    }
+
     println!();
     Ok(())
 }
