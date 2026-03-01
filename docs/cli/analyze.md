@@ -5,7 +5,7 @@ Run all signal extractors on a file and report findings.
 ## Usage
 
 ```
-tiltshift analyze <file> [--block-size <N>] [--json]
+tiltshift analyze <file> [--depth <N>] [--block-size <N>] [--json]
 ```
 
 ## Arguments
@@ -18,6 +18,7 @@ tiltshift analyze <file> [--block-size <N>] [--json]
 
 | Option | Default | Description |
 |---|---|---|
+| `--depth <N>` | `1` | Maximum recursion depth for sub-region analysis (0 = none) |
 | `--block-size <N>` | `256` | Entropy block size in bytes |
 | `--json` | off | Output JSON instead of human-readable text |
 
@@ -81,6 +82,32 @@ Constraints are derived from:
 
 These annotations do not change the analysis — they are hints about where to look next, and what command (e.g. `tiltshift region`) to run on an unknown span with additional context.
 
+### Sub-region descent
+
+When `--depth` is 1 or greater (the default), each KNOWN span that is at least
+32 bytes is automatically re-analyzed as a sub-region. The nested output appears
+indented beneath the KNOWN line:
+
+```
+  0x000048–0x0003e7  KNOWN    Chunk-structured container — RIFF (5 chunks) (88%)
+      ↳ sub-region 0x000048+960 (inside: Chunk-structured container — RIFF (5 chunks))
+        HYPOTHESES
+          [sub-region]    structured binary data  (75%)
+          0x000048+256    Array of fixed-size records (stride=32, ×8)  (82%)
+        LAYOUT  (960 bytes, 1 known, 1 unknown)
+          0x000048–0x000147  KNOWN    Array of fixed-size records (stride=32, ×8) (82%)
+          0x000148–0x0003e7  UNKNOWN  672 B
+```
+
+- **`[sub-region]`** — a file-wide hypothesis for the sub-slice (covers the entire sub-region)
+- All offsets are file-absolute throughout the nested output
+- Sub-regions with no hypotheses or smaller than 32 bytes are skipped silently
+
+Use `--depth 0` to disable descent and restore the flat layout view.
+Use `--depth 2` (or higher) to recurse further. For targeted exploration of a
+known region, [`tiltshift descend`](/cli/descend) offers the same behaviour as
+a standalone command.
+
 ### Signal sections
 
 One section per signal type that produced results, listed after the layout:
@@ -104,10 +131,22 @@ Followed by a **SUMMARY** count for each signal type.
 
 ## Examples
 
-Basic analysis:
+Basic analysis (recurses one level into sub-regions by default):
 
 ```bash
 tiltshift analyze firmware.bin
+```
+
+Flat layout with no sub-region descent:
+
+```bash
+tiltshift analyze firmware.bin --depth 0
+```
+
+Two levels of recursive descent:
+
+```bash
+tiltshift analyze firmware.bin --depth 2
 ```
 
 Larger entropy blocks for a coarser map:

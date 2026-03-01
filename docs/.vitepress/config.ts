@@ -49,6 +49,7 @@ export default withMermaid(
               { text: 'magic', link: '/cli/magic' },
               { text: 'obfuscate', link: '/cli/obfuscate' },
               { text: 'region', link: '/cli/region' },
+              { text: 'descend', link: '/cli/descend' },
               { text: 'diff', link: '/cli/diff' },
             ],
           },
