@@ -4,6 +4,7 @@ use tiltshift::{
     corpus,
     loader::MappedFile,
     probe, signals,
+    signals::length_prefix::body_preview,
     types::{EntropyClass, SignalKind},
 };
 
@@ -151,6 +152,49 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         }
     }
 
+    let len_prefixed: Vec<_> = all_signals
+        .iter()
+        .filter(|s| matches!(&s.kind, SignalKind::LengthPrefixedBlob { .. }))
+        .collect();
+
+    if !len_prefixed.is_empty() {
+        println!("\nLENGTH-PREFIXED BLOBS");
+        println!("{}", "─".repeat(60));
+        for sig in &len_prefixed {
+            let SignalKind::LengthPrefixedBlob {
+                prefix_width,
+                little_endian,
+                declared_len,
+                ..
+            } = &sig.kind
+            else {
+                unreachable!()
+            };
+            let endian_label = if *prefix_width == 1 {
+                String::new()
+            } else if *little_endian {
+                "le".to_string()
+            } else {
+                "be".to_string()
+            };
+            let type_label = format!("u{}{}", prefix_width * 8, endian_label);
+            let preview = body_preview(
+                data,
+                sig.region.offset,
+                *prefix_width as usize,
+                *declared_len,
+            );
+            println!(
+                "  {:8}  {} len={}  {}  (confidence {:.0}%)",
+                sig.region.to_string(),
+                type_label,
+                declared_len,
+                preview,
+                sig.confidence * 100.0
+            );
+        }
+    }
+
     let entropy_blocks: Vec<_> = all_signals
         .iter()
         .filter(|s| matches!(&s.kind, SignalKind::EntropyBlock { .. }))
@@ -177,6 +221,7 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
     println!("{}", "─".repeat(60));
     println!("  {} magic byte match(es)", magic.len());
     println!("  {} null-terminated string(s)", strings.len());
+    println!("  {} length-prefixed blob(s)", len_prefixed.len());
     println!("  {} entropy block(s)", entropy_blocks.len());
 
     let high_entropy_bytes: usize = entropy_blocks

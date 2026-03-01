@@ -1,5 +1,12 @@
 # tiltshift — TODO
 
+## Next up (priority order)
+
+1. **Length-prefixed blob detector** — u8/u16/u32 × LE/BE: value at offset X = N, followed by N bytes of non-null data. Extends string scanner; sets up signal compounding (length-prefix + printable region → "length-prefixed string" hypothesis).
+2. **Chunk pattern detector** — IFF/RIFF/PNG style (4-byte tag + 4-byte length + data, repeating). Lets tiltshift outline WAV/AIFF/PNG/RIFF without knowing the format.
+3. **Numeric value semantics** — scan all u32le/be values, flag: power-of-two, matches file size, within-file-bounds (candidate pointer). Low cost, high signal value; complements `probe` annotations.
+4. **Ngram frequency tables** — bigram/trigram tables; discriminate data types better than entropy alone; repeated ngrams at fixed stride → struct field boundaries.
+
 ## Foundation
 
 <!-- Core types flow directly from the iterative loop model: signals(region) → hypotheses → partial_parse → new_constraints (DESIGN.md § The iterative loop) -->
