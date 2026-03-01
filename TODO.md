@@ -6,7 +6,7 @@
 2. ~~**Chunk pattern detector** — IFF/RIFF/PNG style~~  ✓ done (`e220de7`)
 3. ~~**Numeric value semantics** — scan all u32le/be values~~  ✓ done (`d88f92e`)
 4. ~~**Ngram frequency tables** — bigram/trigram tables~~  ✓ done (`cbcb64e`)
-5. **`tiltshift scan <file> <pattern>`** — find all occurrences of a byte pattern in a file. Pattern input: hex string (same syntax as `magic add`). Output: list of offsets, with probe-style context at each hit. See DESIGN.md § Primitive API `scan`.
+5. ~~**`tiltshift scan <file> <pattern>`** — find all occurrences of a byte pattern in a file~~  ✓ done (`c26ff1b`)
 
 ## Foundation
 
@@ -84,7 +84,7 @@
 <!-- Commands map to the Primitive API sketch in DESIGN.md § Primitive API; JSON mode enables agent consumption (DESIGN.md § Problem space) -->
 
 - [x] `tiltshift probe <file> <offset> [len]` — typed interpretations at offset (DESIGN: Primitive API `probe`)
-- [ ] `tiltshift scan <file> <pattern>` — find all occurrences (DESIGN: Primitive API `scan`)
+- [x] `tiltshift scan <file> <pattern>` — find all occurrences (DESIGN: Primitive API `scan`)
 - [x] `tiltshift analyze <file>` — runs all signals, outputs magic/strings/entropy map
 - [ ] `tiltshift diff <file_a> <file_b>` — structural delta (DESIGN: Primitive API `diff`)
 - [ ] `tiltshift corpus add <format> <files...>` — add to known format library
