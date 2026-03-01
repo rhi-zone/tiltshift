@@ -54,7 +54,7 @@
 
 - [x] Partial schema representation (some regions explained, others unknown) — e.g. `[KNOWN: 0x00–0x3F] [UNKNOWN: 0x40–0x7F] [KNOWN: chunk @ 0x80]`  ✓ done (`5355191`)
 - [x] Constraint propagation: confirmed structure narrows remaining unknowns — unknown region's size/context/neighbors become known  ✓ done (`83df6ca`)
-- [ ] Recursive descent into confirmed sub-regions — chunk interior = fresh analysis target whose type tag, position, size feed back as constraints (DESIGN: The iterative loop)
+- [x] Recursive descent into confirmed sub-regions — chunk interior = fresh analysis target whose type tag, position, size feed back as constraints (DESIGN: The iterative loop)  ✓ done (`analyze --depth N`, `tiltshift descend`)
 - [ ] Session state: persist partial results across invocations
 
 ## Multi-file analysis

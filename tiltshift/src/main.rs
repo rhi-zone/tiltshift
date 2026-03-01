@@ -29,6 +29,9 @@ enum Command {
         /// Output JSON instead of human-readable text.
         #[arg(long)]
         json: bool,
+        /// Maximum recursion depth for sub-region analysis (0 = none, default: 1).
+        #[arg(long, default_value_t = 1)]
+        depth: usize,
     },
 
     /// Show typed interpretations of bytes at an offset.
@@ -98,6 +101,29 @@ enum Command {
         json: bool,
     },
 
+    /// Recursively analyze a specific byte range of a file.
+    ///
+    /// Runs signal extraction and hypothesis building on the specified range, then
+    /// recurses into any identified sub-structures up to --depth levels.
+    ///
+    /// OFFSET and LEN may be decimal or hex (0x…).
+    /// Examples:
+    ///   tiltshift descend data.bin 0x40 256
+    ///   tiltshift descend data.bin 0x40 256 --depth 2
+    Descend {
+        file: PathBuf,
+        /// Byte offset to start analysis (decimal or 0x hex).
+        offset: String,
+        /// Number of bytes to analyze (decimal or 0x hex).
+        len: String,
+        /// Entropy block size in bytes (default: 256).
+        #[arg(long, default_value_t = 256)]
+        block_size: usize,
+        /// Maximum recursion depth (default: 1, 0 = no sub-region analysis).
+        #[arg(long, default_value_t = 1)]
+        depth: usize,
+    },
+
     /// Compare the structure of two binary files.
     ///
     /// Bytes that are identical at the same offset in both files are structural
@@ -150,7 +176,8 @@ fn main() -> anyhow::Result<()> {
             file,
             block_size,
             json,
-        } => cmd_analyze(&file, block_size, json),
+            depth,
+        } => cmd_analyze(&file, block_size, json, depth),
         Command::Probe { file, offset, len } => cmd_probe(&file, &offset, len),
         Command::Magic { action } => match action {
             MagicAction::Add { name, magic } => cmd_magic_add(&name, &magic),
@@ -170,6 +197,13 @@ fn main() -> anyhow::Result<()> {
             block_size,
             json,
         } => cmd_region(&file, &offset, &len, block_size, json),
+        Command::Descend {
+            file,
+            offset,
+            len,
+            block_size,
+            depth,
+        } => cmd_descend(&file, &offset, &len, block_size, depth),
         Command::Diff {
             file_a,
             file_b,
@@ -180,7 +214,10 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<()> {
+/// Minimum sub-region size in bytes worth descending into.
+const MIN_DESCENT_SIZE: usize = 32;
+
+fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> anyhow::Result<()> {
     let mapped = MappedFile::open(path)?;
     let data = mapped.bytes();
     let file_name = path.display();
@@ -268,6 +305,14 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
                         hyp.label,
                         hyp.confidence * 100.0
                     );
+                    if depth > 0 && hyp.region.len >= MIN_DESCENT_SIZE {
+                        let sub_data = hyp.region.slice(data);
+                        println!(
+                            "      ↳ sub-region 0x{start:06x}+{} (inside: {})",
+                            hyp.region.len, hyp.label
+                        );
+                        print_region_analysis(sub_data, start, block_size, depth - 1, "        ");
+                    }
                 }
                 LayoutSpan::Unknown(region) => {
                     let start = region.offset;
@@ -890,6 +935,149 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         0
     };
     println!("  ~{pct}% of file is compressed/high-entropy");
+    println!();
+    Ok(())
+}
+
+/// Print structural analysis (HYPOTHESES + LAYOUT) for a sub-slice, indented.
+///
+/// `base_offset` is the absolute file offset of `data[0]`; all displayed
+/// offsets are translated to absolute coordinates.  `depth` is the remaining
+/// recursion budget — 0 means print this level but do not descend further.
+/// `indent` is prepended to every output line.
+fn print_region_analysis(
+    data: &[u8],
+    base_offset: usize,
+    block_size: usize,
+    depth: usize,
+    indent: &str,
+) {
+    if data.len() < MIN_DESCENT_SIZE {
+        return;
+    }
+    let corpus = corpus::load();
+    let signals = signals::extract_all(data, block_size, &corpus);
+    let schema = hypothesis::build(&signals, data.len());
+
+    if schema.hypotheses.is_empty() {
+        return;
+    }
+
+    // ── HYPOTHESES ───────────────────────────────────────────────────────────
+    const HYP_CAP: usize = 10;
+    let total = schema.hypotheses.len();
+    if total > HYP_CAP {
+        println!("{indent}HYPOTHESES  ({HYP_CAP} of {total} shown)");
+    } else {
+        println!("{indent}HYPOTHESES");
+    }
+    for hyp in schema.hypotheses.iter().take(HYP_CAP) {
+        let region_str = if hyp.region.offset == 0 && hyp.region.len == data.len() {
+            "[sub-region]".to_string()
+        } else {
+            let abs = base_offset + hyp.region.offset;
+            format!("0x{abs:06x}+{}", hyp.region.len)
+        };
+        println!(
+            "{indent}  {region_str:<14}  {}  ({:.0}%)",
+            hyp.label,
+            hyp.confidence * 100.0
+        );
+        if !hyp.reasoning.is_empty() {
+            println!("{indent}    why: {}", hyp.reasoning);
+        }
+    }
+
+    // ── LAYOUT ───────────────────────────────────────────────────────────────
+    let layout = schema.layout();
+    let known_count = layout
+        .iter()
+        .filter(|s| matches!(s, LayoutSpan::Known(_)))
+        .count();
+    if known_count == 0 {
+        return;
+    }
+    let unknown_count = layout.len() - known_count;
+    println!(
+        "{indent}LAYOUT  ({} bytes, {known_count} known, {unknown_count} unknown)",
+        data.len()
+    );
+
+    let constraints = constraint::propagate(&signals);
+    let next_indent = format!("{indent}    ");
+    for span in &layout {
+        match span {
+            LayoutSpan::Known(hyp) => {
+                let abs_start = base_offset + hyp.region.offset;
+                let abs_end = abs_start + hyp.region.len.saturating_sub(1);
+                println!(
+                    "{indent}  0x{abs_start:06x}–0x{abs_end:06x}  KNOWN    {} ({:.0}%)",
+                    hyp.label,
+                    hyp.confidence * 100.0
+                );
+                if depth > 0 && hyp.region.len >= MIN_DESCENT_SIZE {
+                    let sub_data = hyp.region.slice(data);
+                    let sub_base = base_offset + hyp.region.offset;
+                    println!(
+                        "{next_indent}↳ sub-region 0x{sub_base:06x}+{} (inside: {})",
+                        hyp.region.len, hyp.label
+                    );
+                    print_region_analysis(
+                        sub_data,
+                        sub_base,
+                        block_size,
+                        depth - 1,
+                        &format!("{next_indent}  "),
+                    );
+                }
+            }
+            LayoutSpan::Unknown(region) => {
+                let abs_start = base_offset + region.offset;
+                let abs_end = abs_start + region.len.saturating_sub(1);
+                println!(
+                    "{indent}  0x{abs_start:06x}–0x{abs_end:06x}  UNKNOWN  {} B",
+                    region.len
+                );
+                for c in constraint::for_region(&constraints, region) {
+                    println!("{indent}                             ← {}", c.note);
+                }
+            }
+        }
+    }
+}
+
+fn cmd_descend(
+    path: &PathBuf,
+    offset_str: &str,
+    len_str: &str,
+    block_size: usize,
+    depth: usize,
+) -> anyhow::Result<()> {
+    let mapped = MappedFile::open(path)?;
+    let data = mapped.bytes();
+    let file_size = data.len();
+
+    let base = parse_offset(offset_str)
+        .ok_or_else(|| anyhow::anyhow!("invalid offset: {offset_str:?}"))?;
+    let requested_len =
+        parse_offset(len_str).ok_or_else(|| anyhow::anyhow!("invalid length: {len_str:?}"))?;
+
+    if base >= file_size {
+        anyhow::bail!("offset 0x{base:x} is beyond end of file ({file_size} bytes)");
+    }
+    if requested_len == 0 {
+        anyhow::bail!("length must be greater than zero");
+    }
+    let len = requested_len.min(file_size - base);
+
+    let file_name = path.display();
+    let bar = "═".repeat(60);
+    println!("{bar}");
+    println!("  tiltshift descend  {file_name}  0x{base:06x}+{len}  ({len} bytes)");
+    println!("{bar}");
+
+    let slice = &data[base..base + len];
+    print_region_analysis(slice, base, block_size, depth, "");
     println!();
     Ok(())
 }
