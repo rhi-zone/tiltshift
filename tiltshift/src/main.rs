@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tiltshift::{
+    corpus,
     loader::MappedFile,
     signals,
     types::{EntropyClass, SignalKind},
@@ -28,6 +29,35 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+
+    /// Manage the magic byte corpus.
+    Magic {
+        #[command(subcommand)]
+        action: MagicAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum MagicAction {
+    /// Register a new magic byte signature in your user corpus.
+    ///
+    /// MAGIC is a hex string: space-separated pairs or compact.
+    /// Examples:
+    ///   tiltshift magic add "My Format" "4d 59 46 4d"
+    ///   tiltshift magic add "My Format" "4d59464d"
+    Add {
+        /// Human-readable format name.
+        name: String,
+        /// Hex bytes (e.g. "89 50 4e 47" or "89504e47").
+        magic: String,
+    },
+
+    /// List all known magic byte signatures (built-in + user).
+    List {
+        /// Filter by name (case-insensitive substring match).
+        #[arg(long, short)]
+        filter: Option<String>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -38,6 +68,10 @@ fn main() -> anyhow::Result<()> {
             block_size,
             json,
         } => cmd_analyze(&file, block_size, json),
+        Command::Magic { action } => match action {
+            MagicAction::Add { name, magic } => cmd_magic_add(&name, &magic),
+            MagicAction::List { filter } => cmd_magic_list(filter.as_deref()),
+        },
     }
 }
 
@@ -47,20 +81,19 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
     let file_name = path.display();
     let file_size = data.len();
 
-    let all_signals = signals::extract_all(data, block_size);
+    let corpus = corpus::load();
+    let all_signals = signals::extract_all(data, block_size, &corpus);
 
     if json {
         println!("{}", serde_json::to_string_pretty(&all_signals)?);
         return Ok(());
     }
 
-    // ── Header ───────────────────────────────────────────────────────────────
     let bar = "═".repeat(60);
     println!("{bar}");
     println!("  tiltshift  {file_name}  ({file_size} bytes)");
     println!("{bar}");
 
-    // ── Magic bytes ──────────────────────────────────────────────────────────
     let magic: Vec<_> = all_signals
         .iter()
         .filter(|s| matches!(&s.kind, SignalKind::MagicBytes { .. }))
@@ -84,7 +117,6 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         }
     }
 
-    // ── Strings ──────────────────────────────────────────────────────────────
     let strings: Vec<_> = all_signals
         .iter()
         .filter(|s| matches!(&s.kind, SignalKind::NullTerminatedString { .. }))
@@ -106,7 +138,6 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         }
     }
 
-    // ── Entropy map ──────────────────────────────────────────────────────────
     let entropy_blocks: Vec<_> = all_signals
         .iter()
         .filter(|s| matches!(&s.kind, SignalKind::EntropyBlock { .. }))
@@ -129,25 +160,76 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         }
     }
 
-    // ── Summary ──────────────────────────────────────────────────────────────
     println!("\nSUMMARY");
     println!("{}", "─".repeat(60));
     println!("  {} magic byte match(es)", magic.len());
     println!("  {} null-terminated string(s)", strings.len());
     println!("  {} entropy block(s)", entropy_blocks.len());
 
-    let high_entropy = entropy_blocks.iter().filter(|s| {
-        matches!(&s.kind, SignalKind::EntropyBlock { class, .. }
-            if *class == EntropyClass::HighlyRandom || *class == EntropyClass::Compressed)
-    });
-    let high_entropy_bytes: usize = high_entropy.map(|s| s.region.len).sum();
+    let high_entropy_bytes: usize = entropy_blocks
+        .iter()
+        .filter(|s| {
+            matches!(&s.kind, SignalKind::EntropyBlock { class, .. }
+                if *class == EntropyClass::HighlyRandom || *class == EntropyClass::Compressed)
+        })
+        .map(|s| s.region.len)
+        .sum();
     let pct = if file_size > 0 {
         high_entropy_bytes * 100 / file_size
     } else {
         0
     };
     println!("  ~{pct}% of file is compressed/high-entropy");
+    println!();
+    Ok(())
+}
 
+fn cmd_magic_add(name: &str, magic: &str) -> anyhow::Result<()> {
+    let path = corpus::add_entry(name, magic)?;
+    // echo what was stored
+    let normalized = corpus::parse_hex(magic)
+        .map(|b| {
+            b.iter()
+                .map(|x| format!("{x:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_else(|_| magic.to_string());
+    println!("Added: {name:?}  [{normalized}]");
+    println!("  → {}", path.display());
+    Ok(())
+}
+
+fn cmd_magic_list(filter: Option<&str>) -> anyhow::Result<()> {
+    let corpus = corpus::load();
+    let filter_lc = filter.map(|f| f.to_lowercase());
+
+    let bar = "═".repeat(60);
+    println!("{bar}");
+    println!(
+        "  tiltshift magic corpus  ({} entries)",
+        corpus.formats.len()
+    );
+    println!("{bar}");
+
+    for entry in &corpus.formats {
+        if let Some(ref f) = filter_lc {
+            if !entry.name.to_lowercase().contains(f.as_str()) {
+                continue;
+            }
+        }
+        let bytes = entry.magic_bytes().unwrap_or_default();
+        let hex = bytes
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        if let Some(ref mime) = entry.mime {
+            println!("  {:40}  [{}]  ({})", entry.name, hex, mime);
+        } else {
+            println!("  {:40}  [{}]", entry.name, hex);
+        }
+    }
     println!();
     Ok(())
 }

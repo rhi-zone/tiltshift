@@ -2,14 +2,15 @@ pub mod entropy;
 pub mod magic;
 pub mod strings;
 
+use crate::corpus::Corpus;
 use crate::types::Signal;
 
 /// Run all signal extractors over `data` and return every signal found,
 /// in offset order.
-pub fn extract_all(data: &[u8], entropy_block_size: usize) -> Vec<Signal> {
+pub fn extract_all(data: &[u8], entropy_block_size: usize, corpus: &Corpus) -> Vec<Signal> {
     let stride = entropy_block_size / 4;
     let mut signals = Vec::new();
-    signals.extend(magic::scan(data));
+    signals.extend(magic::scan(data, corpus));
     signals.extend(strings::scan_null_terminated(data));
     signals.extend(entropy::entropy_map(
         data,
