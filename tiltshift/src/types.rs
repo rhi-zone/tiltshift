@@ -283,6 +283,9 @@ pub struct Hypothesis {
     pub label: String,
     /// 0.0–1.0 aggregate confidence.
     pub confidence: f64,
+    /// One or two sentences explaining the specific observations that led to
+    /// this conclusion — *why* confidence is what it is, not just *what* was found.
+    pub reasoning: String,
     pub signals: Vec<Signal>,
     /// Alternatives considered and why they ranked lower.
     pub alternatives: Vec<(String, f64)>,
@@ -294,6 +297,7 @@ impl Hypothesis {
             region: signal.region.clone(),
             confidence: signal.confidence,
             label: label.into(),
+            reasoning: String::new(),
             signals: vec![signal],
             alternatives: vec![],
         }

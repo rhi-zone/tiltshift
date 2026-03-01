@@ -162,6 +162,10 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
                 hyp.label,
                 hyp.confidence * 100.0
             );
+            // Reasoning — always shown
+            if !hyp.reasoning.is_empty() {
+                println!("              why: {}", hyp.reasoning);
+            }
             // Contributing signals summary (only when multiple signals compound)
             if hyp.signals.len() > 1 {
                 let desc = hyp
@@ -170,7 +174,7 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
                     .map(|s| hypothesis::signal_kind_label(&s.kind))
                     .collect::<Vec<_>>()
                     .join(", ");
-                println!("              contributing: {desc}");
+                println!("              via: {desc}");
             }
             // Top alternative
             if let Some((alt_label, alt_conf)) = hyp.alternatives.first() {

@@ -88,10 +88,14 @@ pub fn build(signals: &[Signal], file_size: usize) -> PartialSchema {
 
 fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
     match &sig.kind {
-        SignalKind::MagicBytes { format, .. } => Some(Hypothesis {
+        SignalKind::MagicBytes { format, hex } => Some(Hypothesis {
             region: sig.region.clone(),
             label: format!("Known format: {format}"),
             confidence: sig.confidence,
+            reasoning: format!(
+                "Bytes {hex} at offset 0x{:x} match the {format} file signature.",
+                sig.region.offset
+            ),
             signals: vec![sig.clone()],
             alternatives: vec![(
                 "coincidental byte match".to_string(),
@@ -102,23 +106,30 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
         SignalKind::ChunkSequence {
             format_hint,
             chunk_count,
+            tags,
             ..
-        } => Some(Hypothesis {
-            region: sig.region.clone(),
-            label: format!(
-                "Chunk-structured container — {format_hint} family ({chunk_count} chunks)"
-            ),
-            confidence: sig.confidence,
-            signals: vec![sig.clone()],
-            alternatives: vec![("coincidental length patterns".to_string(), 0.15)],
-        }),
+        } => {
+            let tags_str = tags.iter().take(4).cloned().collect::<Vec<_>>().join(", ");
+            Some(Hypothesis {
+                region: sig.region.clone(),
+                label: format!(
+                    "Chunk-structured container — {format_hint} family ({chunk_count} chunks)"
+                ),
+                confidence: sig.confidence,
+                reasoning: format!(
+                    "{chunk_count} sequential {format_hint}-style (tag+len+data) chunks cover the region; first tags: {tags_str}."
+                ),
+                signals: vec![sig.clone()],
+                alternatives: vec![("coincidental length patterns".to_string(), 0.15)],
+            })
+        }
 
         SignalKind::TlvSequence {
             type_width,
             len_width,
             little_endian,
             record_count,
-            ..
+            type_samples,
         } => {
             let tw = format!("u{}", type_width * 8);
             let endian = if *len_width == 1 {
@@ -129,10 +140,20 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                 "be".to_string()
             };
             let lw = format!("u{}{}", len_width * 8, endian);
+            let types_str = type_samples
+                .iter()
+                .take(6)
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             Some(Hypothesis {
                 region: sig.region.clone(),
                 label: format!("TLV-encoded data stream — {tw}+{lw} ({record_count} records)"),
                 confidence: sig.confidence,
+                reasoning: format!(
+                    "{record_count} consecutive records with consistent {tw}+{lw} field widths; \
+                     type codes: {types_str}."
+                ),
                 signals: vec![sig.clone()],
                 alternatives: vec![("coincidental length matches".to_string(), 0.20)],
             })
@@ -159,17 +180,29 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                     "Length-prefixed {content_hint} blob ({type_label} prefix, {declared_len} bytes)"
                 ),
                 confidence: sig.confidence,
+                reasoning: format!(
+                    "Declared length {declared_len} lands within file bounds; \
+                     body is {:.0}% printable ASCII.",
+                    printable_ratio * 100.0
+                ),
                 signals: vec![sig.clone()],
                 alternatives: vec![("coincidental value".to_string(), 0.25)],
             })
         }
 
         SignalKind::RepeatedPattern {
-            stride, occurrences, ..
+            stride,
+            occurrences,
+            pattern,
         } => Some(Hypothesis {
             region: sig.region.clone(),
             label: format!("Array of fixed-size records (stride={stride}, ×{occurrences})"),
             confidence: sig.confidence,
+            reasoning: format!(
+                "{occurrences} occurrences of a {}-byte pattern at stride {stride} — \
+                 consistent spacing implies fixed-size records.",
+                pattern.len()
+            ),
             signals: vec![sig.clone()],
             alternatives: vec![("coincidental repetition".to_string(), 0.20)],
         }),
@@ -191,6 +224,17 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                 ),
                 _ => format!("{encoding} variable-length encoding ({count} values)"),
             };
+            let reasoning = match encoding.as_str() {
+                "leb128-unsigned" => format!(
+                    "{count} consecutive multi-byte LEB128 values, avg {avg_width:.1}B each — \
+                     characteristic of protobuf, WebAssembly, or DWARF."
+                ),
+                "utf8-multibyte" => format!(
+                    "{count} consecutive non-ASCII UTF-8 codepoints, avg {avg_width:.1}B each — \
+                     dense multibyte text (CJK, emoji, or non-Latin script)."
+                ),
+                _ => format!("{count} {encoding} values found in this region."),
+            };
             let alt = match encoding.as_str() {
                 "leb128-unsigned" => (
                     "raw binary data with high-bit bytes".to_string(),
@@ -203,6 +247,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                 region: sig.region.clone(),
                 label,
                 confidence: sig.confidence,
+                reasoning,
                 signals: vec![sig.clone()],
                 alternatives: vec![alt],
             })
@@ -211,13 +256,17 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
         SignalKind::AlignmentHint {
             alignment,
             entropy_spread,
-            ..
+            dominant_phase,
         } => Some(Hypothesis {
             region: sig.region.clone(),
             label: format!(
                 "Data respects {alignment}-byte field alignment (entropy spread {entropy_spread:.2} bits)"
             ),
             confidence: sig.confidence,
+            reasoning: format!(
+                "Per-phase entropy spread {entropy_spread:.2} bits; phase {dominant_phase} is \
+                 most varied — byte values are non-uniform at {alignment}-byte boundaries."
+            ),
             signals: vec![sig.clone()],
             alternatives: vec![(
                 "coincidental byte-value distribution".to_string(),
@@ -238,6 +287,10 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                     region: sig.region.clone(),
                     label: format!("File size stored as u32{endian} = {value}"),
                     confidence: sig.confidence,
+                    reasoning: format!(
+                        "Value {value} equals the file's total byte count exactly — \
+                         likely a stored size field."
+                    ),
                     signals: vec![sig.clone()],
                     alternatives: vec![("coincidental value match".to_string(), 0.20)],
                 })
@@ -248,6 +301,10 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                         "Power-of-two constant u32{endian} = {value} (alignment, count, or buffer size)"
                     ),
                     confidence: sig.confidence,
+                    reasoning: format!(
+                        "Value {value} (0x{value:x}) is a power of two — \
+                         typical for alignment, buffer size, or record count fields."
+                    ),
                     signals: vec![sig.clone()],
                     alternatives: vec![("arbitrary data value".to_string(), 0.35)],
                 })
@@ -258,6 +315,10 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                         "Candidate offset/pointer u32{endian} = 0x{value:x} (in-bounds)"
                     ),
                     confidence: sig.confidence,
+                    reasoning: format!(
+                        "Value 0x{value:x} is within file bounds and 4-byte aligned — \
+                         a plausible offset or pointer in the header region."
+                    ),
                     signals: vec![sig.clone()],
                     alternatives: vec![("unrelated numeric value".to_string(), 0.45)],
                 })
@@ -266,10 +327,21 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
             }
         }
 
-        SignalKind::PackedField { hint, .. } => Some(Hypothesis {
+        SignalKind::PackedField {
+            hint,
+            high_nibble_entropy,
+            low_nibble_entropy,
+            independence_ratio,
+            ..
+        } => Some(Hypothesis {
             region: sig.region.clone(),
             label: format!("Packed nibble sub-fields — {hint}"),
             confidence: sig.confidence,
+            reasoning: format!(
+                "High nibble H={high_nibble_entropy:.2}b, low nibble H={low_nibble_entropy:.2}b, \
+                 independence ratio {independence_ratio:.2} — nibbles vary independently, \
+                 consistent with packed sub-fields."
+            ),
             signals: vec![sig.clone()],
             alternatives: vec![(
                 "coincidental nibble independence".to_string(),
@@ -282,6 +354,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
             little_endian,
             component_nodes,
             component_edges,
+            pointer_density,
             ..
         } => {
             let endian = if *little_endian { "le" } else { "be" };
@@ -293,6 +366,12 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                 region: sig.region.clone(),
                 label,
                 confidence: sig.confidence,
+                reasoning: format!(
+                    "{component_nodes} addresses linked by {component_edges} u{}{endian} pointer \
+                     edges ({:.0}% density) — connected component suggests intentional pointer structure.",
+                    pointer_width * 8,
+                    pointer_density * 100.0,
+                ),
                 signals: vec![sig.clone()],
                 alternatives: vec![(
                     "coincidental within-bounds values".to_string(),
@@ -388,6 +467,10 @@ fn compound_string_tables(signals: &[Signal]) -> (Vec<Hypothesis>, HashSet<usize
                 region: Region::new(first_sig.region.offset, span_len),
                 label,
                 confidence: table_conf,
+                reasoning: format!(
+                    "{count} null-terminated strings in consecutive positions (gap ≤ 4 bytes) \
+                     span {span_len} bytes — density and ordering consistent with a packed string table."
+                ),
                 signals: group.iter().map(|(_, s)| (*s).clone()).collect(),
                 alternatives: vec![(
                     "individual strings in binary structure".to_string(),
@@ -398,10 +481,15 @@ fn compound_string_tables(signals: &[Signal]) -> (Vec<Hypothesis>, HashSet<usize
             // Runs of 1–2 strings: emit as individual hypotheses.
             for (_, sig) in group {
                 if let SignalKind::NullTerminatedString { content } = &sig.kind {
+                    let content_len = sig.region.len.saturating_sub(1);
                     hypotheses.push(Hypothesis {
                         region: sig.region.clone(),
                         label: format!("Null-terminated string: {content:?}"),
                         confidence: sig.confidence,
+                        reasoning: format!(
+                            "Null-terminated ASCII run of {content_len} bytes at offset 0x{:x}.",
+                            sig.region.offset
+                        ),
                         signals: vec![(*sig).clone()],
                         alternatives: vec![(
                             "coincidental null byte after printable run".to_string(),
@@ -492,12 +580,18 @@ fn cross_signal_compounds(signals: &[Signal]) -> (Vec<Hypothesis>, HashSet<usize
                 continue;
             };
             let conf = (ms.confidence.max(cs.confidence) + 0.05).min(0.98);
+            let gap = cs.region.offset.saturating_sub(ms.region.offset);
             hypotheses.push(Hypothesis {
                 region: region_union(&ms.region, &cs.region),
                 label: format!(
                     "Confirmed {format} container — magic header + {chunk_count} chunks"
                 ),
                 confidence: conf,
+                reasoning: format!(
+                    "{format} magic bytes at offset 0x{:x}; chunk sequence begins +{gap}B later — \
+                     two independent signals confirm the format.",
+                    ms.region.offset
+                ),
                 signals: vec![ms.clone(), cs.clone()],
                 alternatives: vec![("partial or corrupt file".to_string(), 0.05)],
             });
@@ -550,6 +644,10 @@ fn cross_signal_compounds(signals: &[Signal]) -> (Vec<Hypothesis>, HashSet<usize
                     "Protobuf-like encoding — TLV field tags + LEB128 values ({record_count} records)"
                 ),
                 confidence: conf,
+                reasoning: format!(
+                    "1-byte TLV field tags ({record_count} records) and LEB128 varints occupy \
+                     the same region — the tag+varint wire encoding is protobuf's hallmark."
+                ),
                 signals: vec![ts.clone(), vs.clone()],
                 alternatives: vec![
                     (
@@ -614,6 +712,11 @@ fn cross_signal_compounds(signals: &[Signal]) -> (Vec<Hypothesis>, HashSet<usize
                     "Struct array — {occurrences}× {stride}-byte records, {alignment}-byte aligned"
                 ),
                 confidence: conf,
+                reasoning: format!(
+                    "Stride {stride} is a multiple of alignment {alignment}; \
+                     repeated pattern and alignment map corroborate each other — \
+                     {occurrences} fixed-size records at aligned boundaries."
+                ),
                 signals: vec![rs.clone(), als.clone()],
                 alternatives: vec![(
                     "coincidental pattern at alignment boundary".to_string(),
@@ -735,10 +838,36 @@ fn file_wide_characterization(signals: &[Signal], file_size: usize) -> Option<Hy
         contributing.push(s.clone());
     }
 
+    // Build reasoning from whichever statistical signals are present.
+    let mut parts: Vec<String> = Vec::new();
+    if let Some((p, _, _)) = &chi {
+        let uniformity = if *p > 0.30 {
+            "suspiciously uniform (encrypted/random)"
+        } else {
+            "non-uniform (structured)"
+        };
+        parts.push(format!("χ² p={p:.3} → {uniformity}"));
+    }
+    if let Some((r, _)) = &compress {
+        let compressibility = if *r >= 0.95 {
+            "incompressible"
+        } else if *r < 0.50 {
+            "highly compressible"
+        } else {
+            "moderately compressible"
+        };
+        parts.push(format!("compression ratio {r:.2} → {compressibility}"));
+    }
+    if let Some((h, entropy, _)) = &ngram {
+        parts.push(format!("bigram profile: {h} (entropy {entropy:.1}b)"));
+    }
+    let reasoning = parts.join("; ") + ".";
+
     Some(Hypothesis {
         region: Region::new(0, file_size),
         label: label.to_string(),
         confidence,
+        reasoning,
         signals: contributing,
         alternatives: vec![(alt_label.to_string(), alt_conf)],
     })
