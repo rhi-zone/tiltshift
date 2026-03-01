@@ -4,22 +4,22 @@
 
 <!-- Core types flow directly from the iterative loop model: signals(region) → hypotheses → partial_parse → new_constraints (DESIGN.md § The iterative loop) -->
 
-- [ ] Cargo workspace + `tiltshift-core` crate
+- [x] Cargo workspace + `tiltshift` crate (single crate with lib + bin targets)
 - [ ] VitePress docs config (`docs/.vitepress/config.ts`, `docs/index.md`)
-- [ ] Core data types: `Region`, `Signal`, `Hypothesis`, `PartialSchema`
-- [ ] File loading with mmap for large inputs
+- [x] Core data types: `Region`, `Signal`, `Hypothesis`, `PartialSchema`
+- [x] File loading with mmap for large inputs
 
 ## Signal extraction
 
 <!-- Full taxonomy in DESIGN.md § Signal taxonomy — statistical, structural, numeric, pointer/offset, bit-level, multi-file -->
 
-- [ ] Byte frequency histogram — shape indicates data type (DESIGN: Statistical signals)
+- [x] Byte frequency histogram — shape indicates data type (DESIGN: Statistical signals)
 - [ ] Bigram / trigram frequency tables — discriminate types better than entropy alone; repeated ngrams at fixed stride → struct fields (DESIGN: Statistical signals)
-- [ ] Shannon entropy (sliding window, not just point-in-time) — transitions between regions > absolute values (DESIGN: Statistical signals)
+- [x] Shannon entropy (sliding window, not just point-in-time) — transitions between regions > absolute values (DESIGN: Statistical signals)
 - [ ] Chi-square test for uniformity (DESIGN: Statistical signals)
 - [ ] Compression ratio probe (try zlib/zstd on a region, measure result) — more honest proxy for randomness than entropy (DESIGN: Statistical signals)
-- [ ] Magic byte scanner (corpus of known magics: PNG, ZIP, ELF, PDF, BMP, WAV, ...) — detect at non-zero offsets; correlate across files (DESIGN: Structural signals)
-- [ ] Null-terminated string scanner — use as structural anchors (DESIGN: Structural signals)
+- [x] Magic byte scanner — 102-entry corpus in data/magic.toml, extensible via `magic add`; detects at non-zero offsets (DESIGN: Structural signals)
+- [x] Null-terminated string scanner — use as structural anchors (DESIGN: Structural signals)
 - [ ] Length-prefixed blob detector (u8/u16/u32 × 3 endiannesses) — especially strong when followed by printable ASCII (DESIGN: Structural signals)
 - [ ] Chunk pattern detector (tag + length + data, repeating — IFF/RIFF/PNG style) (DESIGN: Structural signals)
 - [ ] TLV detector (type-length-value, various widths) (DESIGN: Structural signals)
@@ -77,10 +77,12 @@
 
 - [ ] `tiltshift probe <file> <offset> [len]` — typed interpretations at offset (DESIGN: Primitive API `probe`)
 - [ ] `tiltshift scan <file> <pattern>` — find all occurrences (DESIGN: Primitive API `scan`)
-- [ ] `tiltshift analyze <file>` — full iterative analysis, structured output (DESIGN: Primitive API `what_could_this_be`, iterative loop)
+- [x] `tiltshift analyze <file>` — runs all signals, outputs magic/strings/entropy map
+- [ ] `tiltshift probe <file> <offset> [len]` — typed interpretations at offset (DESIGN: Primitive API `probe`)
+- [ ] `tiltshift scan <file> <pattern>` — find all occurrences (DESIGN: Primitive API `scan`)
 - [ ] `tiltshift diff <file_a> <file_b>` — structural delta (DESIGN: Primitive API `diff`)
 - [ ] `tiltshift corpus add <format> <files...>` — add to known format library
-- [ ] JSON output mode for agent consumption — agents can't use visual interfaces; output must be explicit and queryable (DESIGN: Problem space)
+- [x] JSON output mode for agent consumption (`--json` flag on `analyze`)
 - [ ] Confidence thresholds / verbosity flags
 
 ## Stretch
