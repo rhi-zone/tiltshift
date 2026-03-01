@@ -5,7 +5,7 @@ use tiltshift::{
     loader::MappedFile,
     probe, search, signals,
     signals::{chunk::sequence_label, length_prefix::body_preview, tlv::tlv_label},
-    types::{EntropyClass, LayoutSpan, SignalKind},
+    types::{EntropyClass, LayoutSpan, Signal, SignalKind},
 };
 
 #[derive(Parser)]
@@ -97,6 +97,27 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+
+    /// Compare the structure of two binary files.
+    ///
+    /// Bytes that are identical at the same offset in both files are structural
+    /// (fixed headers, magic bytes, format tags). Bytes that differ are data fields.
+    /// Examples:
+    ///   tiltshift diff a.bin b.bin
+    ///   tiltshift diff a.bin b.bin --min-structural 8
+    Diff {
+        file_a: PathBuf,
+        file_b: PathBuf,
+        /// Minimum run of identical bytes to annotate as structural (default: 4).
+        #[arg(long, default_value_t = 4)]
+        min_structural: usize,
+        /// Entropy block size in bytes (default: 256).
+        #[arg(long, default_value_t = 256)]
+        block_size: usize,
+        /// Output JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -149,6 +170,13 @@ fn main() -> anyhow::Result<()> {
             block_size,
             json,
         } => cmd_region(&file, &offset, &len, block_size, json),
+        Command::Diff {
+            file_a,
+            file_b,
+            min_structural,
+            block_size,
+            json,
+        } => cmd_diff(&file_a, &file_b, min_structural, block_size, json),
     }
 }
 
@@ -1181,6 +1209,358 @@ fn cmd_region(
         counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
         for (label, count) in &counts {
             println!("  {count:3}  {label}");
+        }
+    }
+
+    println!();
+    Ok(())
+}
+
+// ── diff helpers ─────────────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunKind {
+    Structural,
+    Data,
+}
+
+struct DiffRun {
+    offset: usize,
+    len: usize,
+    kind: RunKind,
+}
+
+/// Sweep `a` and `b` byte-by-byte, emitting runs where bytes match (structural)
+/// or differ (data).
+fn compute_diff_runs(a: &[u8], b: &[u8]) -> Vec<DiffRun> {
+    let n = a.len().min(b.len());
+    if n == 0 {
+        return vec![];
+    }
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < n {
+        let is_match = a[i] == b[i];
+        let start = i;
+        while i < n && (a[i] == b[i]) == is_match {
+            i += 1;
+        }
+        runs.push(DiffRun {
+            offset: start,
+            len: i - start,
+            kind: if is_match {
+                RunKind::Structural
+            } else {
+                RunKind::Data
+            },
+        });
+    }
+    runs
+}
+
+/// Partition signals into: shared (same variant + offset in both files), a-only, b-only.
+fn partition_signals(
+    signals_a: &[Signal],
+    signals_b: &[Signal],
+) -> (Vec<Signal>, Vec<Signal>, Vec<Signal>) {
+    let mut shared = Vec::new();
+    let mut a_only = Vec::new();
+    for sig_a in signals_a {
+        if signals_b.iter().any(|sig_b| {
+            std::mem::discriminant(&sig_a.kind) == std::mem::discriminant(&sig_b.kind)
+                && sig_a.region.offset == sig_b.region.offset
+        }) {
+            shared.push(sig_a.clone());
+        } else {
+            a_only.push(sig_a.clone());
+        }
+    }
+    let b_only: Vec<Signal> = signals_b
+        .iter()
+        .filter(|sig_b| {
+            !signals_a.iter().any(|sig_a| {
+                std::mem::discriminant(&sig_a.kind) == std::mem::discriminant(&sig_b.kind)
+                    && sig_a.region.offset == sig_b.region.offset
+            })
+        })
+        .cloned()
+        .collect();
+    (shared, a_only, b_only)
+}
+
+/// Compact one-line description of a signal for use in diff reports.
+fn format_signal_summary(sig: &Signal) -> String {
+    let label = hypothesis::signal_kind_label(&sig.kind);
+    let region = format!("0x{:06x}+{}", sig.region.offset, sig.region.len);
+    let detail: String = match &sig.kind {
+        SignalKind::MagicBytes { format, .. } => format!("\"{format}\""),
+        SignalKind::NullTerminatedString { content } => {
+            let s = if content.len() > 24 {
+                &content[..24]
+            } else {
+                content.as_str()
+            };
+            format!("{s:?}")
+        }
+        SignalKind::ChunkSequence {
+            format_hint,
+            chunk_count,
+            ..
+        } => format!("{format_hint}  {chunk_count} chunks"),
+        SignalKind::LengthPrefixedBlob {
+            prefix_width,
+            declared_len,
+            little_endian,
+            ..
+        } => {
+            let endian = if *little_endian { "le" } else { "be" };
+            format!("u{}{endian}  declared_len={declared_len}", prefix_width * 8)
+        }
+        SignalKind::RepeatedPattern {
+            stride,
+            occurrences,
+            ..
+        } => format!("stride={stride}  ×{occurrences}"),
+        SignalKind::TlvSequence {
+            type_width,
+            len_width,
+            record_count,
+            ..
+        } => format!(
+            "T{}L{}  {record_count} records",
+            type_width * 8,
+            len_width * 8
+        ),
+        SignalKind::AlignmentHint { alignment, .. } => format!("align={alignment}"),
+        SignalKind::VarInt {
+            encoding, count, ..
+        } => format!("{encoding}  ×{count}"),
+        SignalKind::OffsetGraph {
+            pointer_width,
+            component_nodes,
+            ..
+        } => format!("u{}  {component_nodes} nodes", pointer_width * 8),
+        SignalKind::NumericValue { value, .. } => format!("0x{value:08x}"),
+        _ => String::new(),
+    };
+    let conf = (sig.confidence * 100.0) as u32;
+    if detail.is_empty() {
+        format!("  {label:<22}  {region}   conf={conf}%")
+    } else {
+        format!("  {label:<22}  {region}   {detail}  conf={conf}%")
+    }
+}
+
+fn cmd_diff(
+    path_a: &PathBuf,
+    path_b: &PathBuf,
+    min_structural: usize,
+    block_size: usize,
+    json: bool,
+) -> anyhow::Result<()> {
+    let mapped_a = MappedFile::open(path_a)?;
+    let mapped_b = MappedFile::open(path_b)?;
+    let data_a = mapped_a.bytes();
+    let data_b = mapped_b.bytes();
+    let common_len = data_a.len().min(data_b.len());
+    if common_len == 0 {
+        anyhow::bail!("one or both files are empty");
+    }
+
+    let runs = compute_diff_runs(&data_a[..common_len], &data_b[..common_len]);
+    let structural_bytes: usize = runs
+        .iter()
+        .filter(|r| r.kind == RunKind::Structural)
+        .map(|r| r.len)
+        .sum();
+    let data_bytes = common_len - structural_bytes;
+
+    let corpus = corpus::load();
+    let signals_a = signals::extract_all(data_a, block_size, &corpus);
+    let signals_b = signals::extract_all(data_b, block_size, &corpus);
+    let (shared_signals, a_only_signals, b_only_signals) =
+        partition_signals(&signals_a, &signals_b);
+    let schema = hypothesis::build(&shared_signals, common_len);
+
+    if json {
+        let output = serde_json::json!({
+            "file_a": { "path": path_a.display().to_string(), "size": data_a.len() },
+            "file_b": { "path": path_b.display().to_string(), "size": data_b.len() },
+            "common_length": common_len,
+            "structural_bytes": structural_bytes,
+            "data_bytes": data_bytes,
+            "runs": runs.iter().map(|r| serde_json::json!({
+                "offset": r.offset,
+                "len": r.len,
+                "kind": if r.kind == RunKind::Structural { "structural" } else { "data" },
+            })).collect::<Vec<_>>(),
+            "shared_signals": shared_signals,
+            "file_a_only_signals": a_only_signals,
+            "file_b_only_signals": b_only_signals,
+            "hypotheses": schema.hypotheses,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    let bar = "═".repeat(60);
+    println!("{bar}");
+    println!(
+        "  tiltshift diff  {}  vs  {}",
+        path_a.display(),
+        path_b.display()
+    );
+    println!("{bar}");
+    println!();
+    println!("  file_a:  {} bytes  ({})", data_a.len(), path_a.display());
+    println!("  file_b:  {} bytes  ({})", data_b.len(), path_b.display());
+    if data_a.len() != data_b.len() {
+        let diff = data_a.len().abs_diff(data_b.len());
+        let larger = if data_a.len() > data_b.len() {
+            "a"
+        } else {
+            "b"
+        };
+        println!(
+            "  note: file_{larger} is {diff} bytes longer; only the first {common_len} bytes compared"
+        );
+    }
+    let pct_structural = structural_bytes as f64 / common_len as f64 * 100.0;
+    let pct_data = data_bytes as f64 / common_len as f64 * 100.0;
+    println!();
+    println!("  structural:  {structural_bytes} of {common_len} bytes  ({pct_structural:.1}%)  identical");
+    println!("  data:        {data_bytes} of {common_len} bytes  ({pct_data:.1}%)  vary");
+
+    // Byte map
+    println!("\nBYTE MAP  ({} runs)", runs.len());
+    println!("{}", "─".repeat(60));
+    const RUN_CAP: usize = 60;
+    for run in runs.iter().take(RUN_CAP) {
+        let label = match run.kind {
+            RunKind::Structural => "STRUCT",
+            RunKind::Data => "DATA  ",
+        };
+        // Annotate structural runs ≥ min_structural with the signal kinds they contain.
+        let annotation = if run.kind == RunKind::Structural && run.len >= min_structural {
+            let mut seen = std::collections::HashSet::new();
+            let kinds: Vec<&str> = shared_signals
+                .iter()
+                .filter(|s| s.region.offset >= run.offset && s.region.offset < run.offset + run.len)
+                .map(|s| hypothesis::signal_kind_label(&s.kind))
+                .filter(|&lbl| seen.insert(lbl))
+                .collect();
+            if kinds.is_empty() {
+                String::new()
+            } else {
+                format!("  → {}", kinds.join(", "))
+            }
+        } else {
+            String::new()
+        };
+        println!(
+            "  [{label}] 0x{:06x}+{:5}{}",
+            run.offset, run.len, annotation
+        );
+    }
+    if runs.len() > RUN_CAP {
+        println!(
+            "  … {} more runs (use --json for full list)",
+            runs.len() - RUN_CAP
+        );
+    }
+
+    // Shared signals
+    if !shared_signals.is_empty() {
+        println!(
+            "\nSHARED SIGNALS  ({} structural markers confirmed in both files)",
+            shared_signals.len()
+        );
+        println!("{}", "─".repeat(60));
+        const SIG_CAP: usize = 20;
+        for sig in shared_signals.iter().take(SIG_CAP) {
+            println!("{}", format_signal_summary(sig));
+        }
+        if shared_signals.len() > SIG_CAP {
+            println!(
+                "  … {} more (use --json for full list)",
+                shared_signals.len() - SIG_CAP
+            );
+        }
+    }
+
+    // Hypotheses from shared signals
+    if !schema.hypotheses.is_empty() {
+        println!("\nHYPOTHESES  (structural interpretation)");
+        println!("{}", "─".repeat(60));
+        const HYP_CAP: usize = 10;
+        for hyp in schema.hypotheses.iter().take(HYP_CAP) {
+            let region_str = if hyp.region.len == common_len {
+                "[file]    ".to_string()
+            } else {
+                format!("0x{:06x}+{}", hyp.region.offset, hyp.region.len)
+            };
+            println!(
+                "  {}  {}  (confidence {:.0}%)",
+                region_str,
+                hyp.label,
+                hyp.confidence * 100.0
+            );
+            if !hyp.reasoning.is_empty() {
+                println!("              why: {}", hyp.reasoning);
+            }
+            if hyp.signals.len() > 1 {
+                let desc = hyp
+                    .signals
+                    .iter()
+                    .map(|s| hypothesis::signal_kind_label(&s.kind))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("              via: {desc}");
+            }
+            if let Some((alt_label, alt_conf)) = hyp.alternatives.first() {
+                println!("              alt: {alt_label} ({:.0}%)", alt_conf * 100.0);
+            }
+        }
+        if schema.hypotheses.len() > HYP_CAP {
+            println!(
+                "  … {} more (use --json for full list)",
+                schema.hypotheses.len() - HYP_CAP
+            );
+        }
+    }
+
+    // Divergent signals
+    const DIV_CAP: usize = 10;
+    if !a_only_signals.is_empty() {
+        println!(
+            "\nFILE_A ONLY SIGNALS  ({} — likely data-dependent)",
+            a_only_signals.len()
+        );
+        println!("{}", "─".repeat(60));
+        for sig in a_only_signals.iter().take(DIV_CAP) {
+            println!("{}", format_signal_summary(sig));
+        }
+        if a_only_signals.len() > DIV_CAP {
+            println!(
+                "  … {} more (use --json for full list)",
+                a_only_signals.len() - DIV_CAP
+            );
+        }
+    }
+    if !b_only_signals.is_empty() {
+        println!(
+            "\nFILE_B ONLY SIGNALS  ({} — likely data-dependent)",
+            b_only_signals.len()
+        );
+        println!("{}", "─".repeat(60));
+        for sig in b_only_signals.iter().take(DIV_CAP) {
+            println!("{}", format_signal_summary(sig));
+        }
+        if b_only_signals.len() > DIV_CAP {
+            println!(
+                "  … {} more (use --json for full list)",
+                b_only_signals.len() - DIV_CAP
+            );
         }
     }
 
