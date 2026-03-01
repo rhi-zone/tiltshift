@@ -37,7 +37,7 @@
 - [x] Padding detector (runs of 0x00 or 0xFF) (DESIGN: Numeric value semantics)
 - [ ] Pointer / offset graph builder — render as graph; pointer chasing should be automatic (DESIGN: Pointer / offset graph)
 - [x] Variable-length integer encoding detector (LEB128, UTF-8 continuation) (DESIGN: Bit-level signals)  ✓ done
-- [ ] Packed field detector (nibble-level independent variation) (DESIGN: Bit-level signals)
+- [x] Packed field detector (nibble-level independent variation) (DESIGN: Bit-level signals)  ✓ done (`d4d1108`)
 
 ## Hypothesis engine
 
