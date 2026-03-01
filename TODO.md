@@ -25,7 +25,7 @@
 - [x] Bigram / trigram frequency tables — discriminate types better than entropy alone; repeated ngrams at fixed stride → struct fields (DESIGN: Statistical signals)
 - [x] Shannon entropy (sliding window, not just point-in-time) — transitions between regions > absolute values (DESIGN: Statistical signals)
 - [x] Chi-square test for uniformity (DESIGN: Statistical signals)  ✓ done (`617a3c8`)
-- [ ] Compression ratio probe (try zlib/zstd on a region, measure result) — more honest proxy for randomness than entropy (DESIGN: Statistical signals)
+- [x] Compression ratio probe (try zlib/zstd on a region, measure result) — more honest proxy for randomness than entropy (DESIGN: Statistical signals)  ✓ done
 - [x] Magic byte scanner — 102-entry corpus in data/magic.toml, extensible via `magic add`; detects at non-zero offsets (DESIGN: Structural signals)
 - [x] Null-terminated string scanner — use as structural anchors (DESIGN: Structural signals)
 - [x] Length-prefixed blob detector (u8/u16/u32 × LE/BE) — especially strong when followed by printable ASCII (DESIGN: Structural signals)
@@ -93,6 +93,7 @@
 
 ## Stretch
 
+- [ ] `tiltshift obfuscate <file>` — copy file to `<filename>.unk` then zero out known magic bytes to produce an opaque blob for analysis testing
 - [ ] REPL / interactive session for iterative exploration
 - [ ] normalize integration (structural view of tiltshift's own output) — same pattern, different domain (DESIGN: Relation to rhi ecosystem)
 - [ ] paraphase integration (tiltshift output as format understanding input) — paraphase needs format understanding before planning conversion routes (DESIGN: Relation to rhi ecosystem)

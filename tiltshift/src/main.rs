@@ -530,6 +530,38 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         println!("  → {}", chisq_sig.reason);
     }
 
+    // ── Compression ratio probe (one per file) ───────────────────────────────
+    if let Some(compress_sig) = all_signals
+        .iter()
+        .find(|s| matches!(&s.kind, SignalKind::CompressionProbe { .. }))
+    {
+        let SignalKind::CompressionProbe {
+            original_size,
+            compressed_size,
+            ratio,
+        } = &compress_sig.kind
+        else {
+            unreachable!()
+        };
+        let label = if *ratio >= 0.99 {
+            "incompressible"
+        } else if *ratio >= 0.90 {
+            "nearly incompressible"
+        } else if *ratio >= 0.70 {
+            "mildly compressible"
+        } else if *ratio >= 0.40 {
+            "moderately compressible"
+        } else {
+            "highly compressible"
+        };
+        println!("\nCOMPRESSION PROBE");
+        println!("{}", "─".repeat(60));
+        println!(
+            "  {compressed_size}/{original_size} bytes  ratio {ratio:.3}  → {label}  (confidence {:.0}%)",
+            compress_sig.confidence * 100.0
+        );
+    }
+
     let entropy_blocks: Vec<_> = all_signals
         .iter()
         .filter(|s| matches!(&s.kind, SignalKind::EntropyBlock { .. }))
@@ -569,6 +601,11 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
         .filter(|s| matches!(&s.kind, SignalKind::ChiSquare { .. }))
         .count();
     println!("  {} chi-square test(s)", chisq_count);
+    let compress_count = all_signals
+        .iter()
+        .filter(|s| matches!(&s.kind, SignalKind::CompressionProbe { .. }))
+        .count();
+    println!("  {} compression probe(s)", compress_count);
     println!("  {} repeating stride pattern(s)", stride_sigs.len());
     println!("  {} TLV sequence(s)", tlv_seqs.len());
     println!("  {} padding run(s)", padding_runs.len());

@@ -177,6 +177,22 @@ pub enum SignalKind {
         /// high ≈ suspiciously uniform.
         p_value: f64,
     },
+    /// Compression ratio probe: result of trying to deflate-compress the whole file.
+    ///
+    /// A ratio near or above 1.0 indicates incompressible data (random, encrypted,
+    /// or already-compressed).  A low ratio indicates sequential structure that
+    /// deflate's LZ77 + Huffman stage can exploit (repetition, locality).
+    ///
+    /// Complements chi-square (frequency uniformity) and Shannon entropy (symbol
+    /// distribution), both of which are blind to sequential patterns.
+    CompressionProbe {
+        /// Original byte count.
+        original_size: usize,
+        /// Byte count after zlib/deflate compression (level 6).
+        compressed_size: usize,
+        /// `compressed_size / original_size` — lower means more compressible.
+        ratio: f64,
+    },
     /// Structural regularity at a specific byte alignment boundary.
     ///
     /// Detected by comparing per-phase Shannon entropy across the file: when one
