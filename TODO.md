@@ -75,11 +75,9 @@
 
 <!-- Commands map to the Primitive API sketch in DESIGN.md § Primitive API; JSON mode enables agent consumption (DESIGN.md § Problem space) -->
 
-- [ ] `tiltshift probe <file> <offset> [len]` — typed interpretations at offset (DESIGN: Primitive API `probe`)
+- [x] `tiltshift probe <file> <offset> [len]` — typed interpretations at offset (DESIGN: Primitive API `probe`)
 - [ ] `tiltshift scan <file> <pattern>` — find all occurrences (DESIGN: Primitive API `scan`)
 - [x] `tiltshift analyze <file>` — runs all signals, outputs magic/strings/entropy map
-- [ ] `tiltshift probe <file> <offset> [len]` — typed interpretations at offset (DESIGN: Primitive API `probe`)
-- [ ] `tiltshift scan <file> <pattern>` — find all occurrences (DESIGN: Primitive API `scan`)
 - [ ] `tiltshift diff <file_a> <file_b>` — structural delta (DESIGN: Primitive API `diff`)
 - [ ] `tiltshift corpus add <format> <files...>` — add to known format library
 - [x] JSON output mode for agent consumption (`--json` flag on `analyze`)

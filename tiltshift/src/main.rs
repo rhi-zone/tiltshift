@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use tiltshift::{
     corpus,
     loader::MappedFile,
-    signals,
+    probe, signals,
     types::{EntropyClass, SignalKind},
 };
 
@@ -28,6 +28,18 @@ enum Command {
         /// Output JSON instead of human-readable text.
         #[arg(long)]
         json: bool,
+    },
+
+    /// Show typed interpretations of bytes at an offset.
+    ///
+    /// OFFSET may be decimal or hex (0x…). LEN defaults to 8.
+    Probe {
+        file: PathBuf,
+        /// Byte offset to inspect (decimal or 0x hex).
+        offset: String,
+        /// Number of bytes to read (default: 8).
+        #[arg(default_value_t = 8)]
+        len: usize,
     },
 
     /// Manage the magic byte corpus.
@@ -68,6 +80,7 @@ fn main() -> anyhow::Result<()> {
             block_size,
             json,
         } => cmd_analyze(&file, block_size, json),
+        Command::Probe { file, offset, len } => cmd_probe(&file, &offset, len),
         Command::Magic { action } => match action {
             MagicAction::Add { name, magic } => cmd_magic_add(&name, &magic),
             MagicAction::List { filter } => cmd_magic_list(filter.as_deref()),
@@ -182,6 +195,84 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool) -> anyhow::Result<
     println!("  ~{pct}% of file is compressed/high-entropy");
     println!();
     Ok(())
+}
+
+fn cmd_probe(path: &PathBuf, offset_str: &str, len: usize) -> anyhow::Result<()> {
+    let mapped = MappedFile::open(path)?;
+    let data = mapped.bytes();
+    let file_size = data.len();
+
+    let offset = parse_offset(offset_str)
+        .ok_or_else(|| anyhow::anyhow!("invalid offset: {offset_str:?}"))?;
+
+    if offset >= file_size {
+        anyhow::bail!("offset 0x{offset:x} is beyond end of file ({file_size} bytes)");
+    }
+
+    let result = probe::probe(data, offset, len, file_size);
+
+    let hex_bytes: String = result
+        .bytes
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let bar = "═".repeat(60);
+    println!("{bar}");
+    println!(
+        "  probe  {}  @0x{:x}  ({} byte{})",
+        path.display(),
+        offset,
+        result.bytes.len(),
+        if result.bytes.len() == 1 { "" } else { "s" }
+    );
+    println!("{bar}");
+    println!("  bytes  {hex_bytes}");
+    println!("{}", "─".repeat(60));
+
+    // Group by width for display
+    for width in [1usize, 2, 4, 8] {
+        let group: Vec<_> = result.by_width(width).collect();
+        if group.is_empty() {
+            continue;
+        }
+        for interp in group {
+            let note = interp
+                .note
+                .as_deref()
+                .map(|n| format!("  ← {n}"))
+                .unwrap_or_default();
+            println!("  {:<14}  {}{}", interp.label, interp.value, note);
+        }
+        println!("{}", "─".repeat(60));
+    }
+
+    // String / hex interpretations (width = 0 sentinel)
+    let text_group: Vec<_> = result.by_width(0).collect();
+    if !text_group.is_empty() {
+        for interp in text_group {
+            let note = interp
+                .note
+                .as_deref()
+                .map(|n| format!("  ← {n}"))
+                .unwrap_or_default();
+            println!("  {:<14}  {}{}", interp.label, interp.value, note);
+        }
+        println!("{}", "─".repeat(60));
+    }
+    println!();
+    Ok(())
+}
+
+/// Parse a decimal or 0x-prefixed hex string into a usize offset.
+fn parse_offset(s: &str) -> Option<usize> {
+    let s = s.trim();
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        usize::from_str_radix(hex, 16).ok()
+    } else {
+        s.parse::<usize>().ok()
+    }
 }
 
 fn cmd_magic_add(name: &str, magic: &str) -> anyhow::Result<()> {
