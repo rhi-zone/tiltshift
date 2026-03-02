@@ -68,9 +68,19 @@ pub fn load(file: &Path) -> Option<SessionState> {
 }
 
 /// Persist `state` to `<file>.tiltshift.toml`.
+///
+/// Opens the destination file *before* serializing so that read-only paths
+/// fail fast without paying the cost of TOML serialization (which can be
+/// expensive when the state contains many signals).
 pub fn save(file: &Path, state: &SessionState) -> anyhow::Result<()> {
     let path = sidecar_path(file);
+    use std::io::Write;
+    let mut dest = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)?;
     let text = toml::to_string_pretty(state)?;
-    std::fs::write(&path, text)?;
+    dest.write_all(text.as_bytes())?;
     Ok(())
 }

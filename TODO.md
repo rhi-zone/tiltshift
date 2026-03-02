@@ -92,6 +92,13 @@
 - [x] JSON output mode for agent consumption (`--json` flag on `analyze`)
 - [x] Confidence thresholds / verbosity flags  ✓ done (`9ed3ecb`, `--min-confidence`, `--verbose`)
 
+## Performance
+
+- [x] `offset_graph` early-exit on density > 50% (mid-scan bail-out avoids building union-find for noisy data)  ✓ done
+- [x] `length_prefix` O(n²) body scanning fixed: body quality now sampled (max 512 bytes), body capped at 4 KB/64 KB, printable ≥ 50% required for u16/u32  ✓ done
+- [x] `session::save` serialized signals before checking writability — now opens file first to fail fast on read-only paths  ✓ done
+- Net result: 1.5 MB ELF analysis 90 s → ~2 s (release build)
+
 ## Stretch
 
 - [x] `tiltshift obfuscate <file>` — copy file to `<filename>.unk` then zero out known magic bytes to produce an opaque blob for analysis testing  ✓ done

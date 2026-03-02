@@ -99,6 +99,13 @@ fn scan_width(data: &[u8], width: usize, little_endian: bool) -> Option<Signal> 
         return None;
     }
 
+    // Bail out early if density exceeds 50%.  High density means the file
+    // is large enough that many arbitrary values happen to land within
+    // bounds — the signal would be noise and we'd penalise it anyway.
+    // Checking mid-scan avoids ever building the expensive union-find for
+    // the noisy case.
+    let max_candidates = total_positions / 2;
+
     let mut uf = UnionFind::new();
     let mut edges: Vec<(usize, usize)> = Vec::new();
     let mut candidate_count = 0usize;
@@ -112,6 +119,10 @@ fn scan_width(data: &[u8], width: usize, little_endian: bool) -> Option<Signal> 
         // a self-loop.
         if value >= width && value < file_size && value != pos {
             candidate_count += 1;
+            if candidate_count > max_candidates {
+                // density > 50% — bail before building the full UF structure.
+                return None;
+            }
             uf.union(pos, value);
             edges.push((pos, value));
         }
@@ -157,8 +168,7 @@ fn scan_width(data: &[u8], width: usize, little_endian: bool) -> Option<Signal> 
 
     let density = candidate_count as f64 / total_positions as f64;
     let size_boost = 0.20 * ((component_nodes - min_threshold) as f64 / 10.0).min(1.0);
-    let dense_pen = if density > 0.50 { 0.15 } else { 0.0 };
-    let confidence = (0.50 + size_boost - dense_pen).clamp(0.0, 0.85);
+    let confidence = (0.50 + size_boost).clamp(0.0, 0.85);
 
     let endian_str = if little_endian { "le" } else { "be" };
     let reason = format!(
@@ -370,19 +380,17 @@ mod tests {
         assert!(*component_nodes >= 2, "component_nodes={component_nodes}");
     }
 
-    // ── Test 6: high-density data → density penalty reduces confidence ────────
+    // ── Test 6: high-density data → no signal emitted ────────────────────────
 
-    /// When nearly all positions are within-bounds candidates, the density
-    /// penalty lowers confidence.  We verify that the confidence formula
-    /// applies correctly (density > 0.5 → penalty of 0.15).
+    /// When nearly all positions are within-bounds candidates (density > 50%),
+    /// the scan bails out early and emits no signal — the data is noise.
     #[test]
-    fn high_density_applies_density_penalty() {
-        // Build a file where all u32le values form a single large component
-        // and density is > 50%.  Use a tight cycle: pos N → pos N+4.
-        // With 64 positions in a 256-byte file, most will be within bounds.
+    fn high_density_emits_no_signal() {
+        // Build a file where all u32le values are within bounds.
+        // Each position i points to (i*4 + 4) % file_size.
+        // With 64 positions in a 256-byte file, density > 50%.
         let file_size = 256usize;
         let mut data = vec![0u8; file_size];
-        // Each position i points to (i*4 + 4) % file_size, but skip zero.
         for i in 0..(file_size / 4) {
             let pos = i * 4;
             let target = (pos + 4) % file_size;
@@ -392,31 +400,16 @@ mod tests {
         }
 
         let sigs = scan_offset_graph(&data);
-        for sig in sigs.iter().filter(|s| {
-            matches!(
+        assert!(
+            !sigs.iter().any(|s| matches!(
                 &s.kind,
                 SignalKind::OffsetGraph {
                     pointer_width: 4,
                     little_endian: true,
                     ..
                 }
-            )
-        }) {
-            let SignalKind::OffsetGraph {
-                pointer_density, ..
-            } = &sig.kind
-            else {
-                unreachable!()
-            };
-            if *pointer_density > 0.50 {
-                // density penalty of 0.15 must have applied — confidence
-                // must be ≤ 0.85 - 0.15 + some size_boost = at most 0.85
-                // but more importantly must be < 0.85 (penalty applied).
-                assert!(
-                    sig.confidence < 0.85,
-                    "density={pointer_density:.3}, expected confidence < 0.85 (penalty applied)"
-                );
-            }
-        }
+            )),
+            "expected no u32le signal for high-density data"
+        );
     }
 }

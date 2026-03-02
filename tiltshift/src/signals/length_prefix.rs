@@ -13,6 +13,22 @@ const MIN_BODY: usize = 4;
 /// Stricter minimum for u8 prefixes, which fire very frequently by chance.
 const MIN_BODY_U8: usize = 8;
 
+/// Maximum bytes examined for body quality estimation.
+///
+/// Scanning the full declared body at every offset is O(n²) for large files.
+/// A 512-byte prefix sample is sufficient to assess body character.
+const QUALITY_SAMPLE: usize = 512;
+
+/// Maximum body length for u16-prefixed blobs.
+///
+/// Blobs above this threshold are almost certainly not length-prefixed strings
+/// or small records — they're better characterised by chunk / TLV signals.
+/// Capping here keeps the u16 scan close to O(n) for large files.
+const MAX_BODY_U16: usize = 4_096;
+
+/// Maximum body length for u32-prefixed blobs.
+const MAX_BODY_U32: usize = 65_535;
+
 /// Scan `data` for length-prefixed blobs.
 ///
 /// For each prefix variant (u8, u16le, u16be, u32le, u32be) at every offset,
@@ -56,10 +72,15 @@ pub fn scan_length_prefixed(data: &[u8]) -> Vec<Signal> {
         // ── u16 LE prefix ────────────────────────────────────────────────────
         if offset + 2 <= len {
             let n = u16::from_le_bytes([data[offset], data[offset + 1]]) as usize;
-            if n >= MIN_BODY && offset + 2 + n <= len {
+            if (MIN_BODY..=MAX_BODY_U16).contains(&n) && offset + 2 + n <= len {
                 let body = &data[offset + 2..offset + 2 + n];
-                let (non_null, printable) = body_quality(body);
-                if non_null >= 0.70 {
+                // Sample first QUALITY_SAMPLE bytes to keep this O(1) per position.
+                // Require printable ≥ 0.50: code sections are only ~15% printable,
+                // so this filters the dominant false-positive source without missing
+                // real text blobs.  Binary protocol PDUs are handled by TLV.
+                let sample = &body[..body.len().min(QUALITY_SAMPLE)];
+                let (non_null, printable) = body_quality(sample);
+                if non_null >= 0.70 && printable >= 0.50 {
                     let conf = confidence_u16(n, printable);
                     signals.push(Signal::new(
                         Region::new(offset, 2 + n),
@@ -83,10 +104,11 @@ pub fn scan_length_prefixed(data: &[u8]) -> Vec<Signal> {
         // ── u16 BE prefix ────────────────────────────────────────────────────
         if offset + 2 <= len {
             let n = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
-            if n >= MIN_BODY && offset + 2 + n <= len {
+            if (MIN_BODY..=MAX_BODY_U16).contains(&n) && offset + 2 + n <= len {
                 let body = &data[offset + 2..offset + 2 + n];
-                let (non_null, printable) = body_quality(body);
-                if non_null >= 0.70 {
+                let sample = &body[..body.len().min(QUALITY_SAMPLE)];
+                let (non_null, printable) = body_quality(sample);
+                if non_null >= 0.70 && printable >= 0.50 {
                     let conf = confidence_u16(n, printable);
                     signals.push(Signal::new(
                         Region::new(offset, 2 + n),
@@ -115,11 +137,14 @@ pub fn scan_length_prefixed(data: &[u8]) -> Vec<Signal> {
                 data[offset + 2],
                 data[offset + 3],
             ]) as usize;
-            // Cap at file length to avoid huge false-positive windows.
-            if n >= MIN_BODY && offset + 4 + n <= len {
+            if (MIN_BODY..=MAX_BODY_U32).contains(&n) && offset + 4 + n <= len {
                 let body = &data[offset + 4..offset + 4 + n];
-                let (non_null, printable) = body_quality(body);
-                if non_null >= 0.40 {
+                let sample = &body[..body.len().min(QUALITY_SAMPLE)];
+                let (non_null, printable) = body_quality(sample);
+                // Same printable threshold as u16: code sections are ~15%
+                // printable so this rejects the dominant false-positive source.
+                // Binary blobs are better characterised by TLV / chunk signals.
+                if non_null >= 0.70 && printable >= 0.50 {
                     let conf = confidence_u32(n, printable);
                     signals.push(Signal::new(
                         Region::new(offset, 4 + n),
@@ -148,10 +173,11 @@ pub fn scan_length_prefixed(data: &[u8]) -> Vec<Signal> {
                 data[offset + 2],
                 data[offset + 3],
             ]) as usize;
-            if n >= MIN_BODY && offset + 4 + n <= len {
+            if (MIN_BODY..=MAX_BODY_U32).contains(&n) && offset + 4 + n <= len {
                 let body = &data[offset + 4..offset + 4 + n];
-                let (non_null, printable) = body_quality(body);
-                if non_null >= 0.40 {
+                let sample = &body[..body.len().min(QUALITY_SAMPLE)];
+                let (non_null, printable) = body_quality(sample);
+                if non_null >= 0.70 && printable >= 0.50 {
                     let conf = confidence_u32(n, printable);
                     signals.push(Signal::new(
                         Region::new(offset, 4 + n),
