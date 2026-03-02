@@ -38,7 +38,7 @@
 - [x] Pointer / offset graph builder — render as graph; pointer chasing should be automatic (DESIGN: Pointer / offset graph)  ✓ done
 - [x] Variable-length integer encoding detector (LEB128, UTF-8 continuation) (DESIGN: Bit-level signals)  ✓ done
 - [x] Packed field detector (nibble-level independent variation) (DESIGN: Bit-level signals)  ✓ done (`d4d1108`)
-- [ ] **Bytecode stream detector** — sequential-parse signals for opcode-driven formats; fundamentally different from position-independent signals; see design notes below
+- [x] **Bytecode stream detector** — `signals/bytecode.rs`; phases 1–3; `BytecodeStream` signal kind; frequency analysis (top-5 dominance gate)  ✓ done (`edcd709`, `060fb95`)
 
 ## Bytecode grammar discovery
 
@@ -47,10 +47,11 @@
      grammar files are outputs not inputs. Must derive WASM/pyc/JVM/x86
      from first principles or the tool has failed. -->
 
-- [ ] **Phase 1 — fixed-width scan** (`signals/bytecode.rs`) — try W∈{1,2,3,4,8}; measure entropy separation between opcode positions (0,W,2W,…) and operand positions; emit `BytecodeStream { fixed_width: Some(W), decode_coverage, … }` when score exceeds threshold; handles Python .pyc 3.6+ (W=2), simple VMs, RISC
-- [ ] **Phase 2 — variable-width bootstrap** — from candidate entry point, greedily decode with empty grammar; for each unknown opcode try widths 0–4, pick the one that extends the decode furthest; iterate until coverage stops improving (≤3 passes typical); fills `opcode_widths` in the signal
-- [ ] **Phase 3 — jump target validation** — after decode, count decoded operand values that land on instruction boundaries; ratio is `jump_validity`; strong confirmation when high; see DESIGN.md for confidence formula
-- [ ] **`BytecodeStream` signal kind** — `{ entry_point, decode_coverage, jump_validity, instruction_count, fixed_width, opcode_widths }`; minimum to emit: confidence ≥ 0.45 AND coverage ≥ 0.60 AND count ≥ 16
+- [x] **Phase 1 — fixed-width scan** — entropy separation H(operands)−H(opcodes) > 0.5 bits; W∈{1,2,3,4,8}  ✓ done
+- [x] **Phase 2 — variable-width bootstrap** — greedy lookahead, ≤3 passes, coverage-delta < 0.01 exit  ✓ done
+- [x] **Phase 3 — jump target validation** — branch operands landing on instruction boundaries  ✓ done
+- [x] **`BytecodeStream` signal kind** — entry_point, decode_coverage, jump_validity, instruction_count, fixed_width, opcode_widths  ✓ done
+- [x] **Frequency analysis** — top-5 opcode dominance hard gate (≥ 0.20); entropy_sep_norm in confidence  ✓ done
 - [ ] **`tiltshift decode <file> <offset> <format>`** — display command only; reads `data/opcodes/<format>.toml`; never feeds back into discovery
 - [ ] **`tiltshift opcodes add/list`** — register and list grammar files; grammar files are human-written outputs of verified discovery
 
@@ -119,6 +120,7 @@
 - [x] `tiltshift obfuscate <file>` — copy file to `<filename>.unk` then zero out known magic bytes to produce an opaque blob for analysis testing  ✓ done
 - [x] **`length_prefix` stride extension** — histogram over inter-blob gaps finds consistent non-zero gaps; `inter_blob_gap: usize` field added to `LengthPrefixedBlob` (0 = exact, N = N-byte gap); ≥3 blobs required for stride>0  ✓ done (`69b026a`)
 - [ ] V8 compressed pointer cluster — u32 values with low bit=1 (tagged pointers), narrow upper-32 range (shared cage base); emit `CompressedPointerCluster` signal (future extension of offset graph)
+- [ ] Integration test on real .pyc file — verify BytecodeStream emits (W=2 expected for CPython 3.6+); need a sample .pyc or generate one with `python3 -c "import py_compile; py_compile.compile('x.py')"` and strip the 16-byte header first
 - [ ] REPL / interactive session for iterative exploration
 - [ ] normalize integration (structural view of tiltshift's own output) — same pattern, different domain (DESIGN: Relation to rhi ecosystem)
 - [ ] paraphase integration (tiltshift output as format understanding input) — paraphase needs format understanding before planning conversion routes (DESIGN: Relation to rhi ecosystem)
