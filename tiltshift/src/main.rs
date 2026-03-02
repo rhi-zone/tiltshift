@@ -166,6 +166,30 @@ enum Command {
         json: bool,
     },
 
+    /// Check a file against a structural model built from reference samples.
+    ///
+    /// Builds a consensus model from the reference files, then reports signals in
+    /// the target that diverge: unexpected signals not in the model, and expected
+    /// signals that are absent from the target.
+    /// Examples:
+    ///   tiltshift anomaly suspect.bin ref1.bin ref2.bin ref3.bin
+    ///   tiltshift anomaly --threshold 0.8 suspect.bin ref1.bin ref2.bin
+    Anomaly {
+        /// The file to check for anomalies.
+        target: PathBuf,
+        /// Two or more reference files defining the expected format.
+        refs: Vec<PathBuf>,
+        /// Min fraction of refs a signal must appear in to count as expected (default: 1.0).
+        #[arg(long, default_value_t = 1.0)]
+        threshold: f64,
+        /// Entropy block size in bytes (default: 256).
+        #[arg(long, default_value_t = 256)]
+        block_size: usize,
+        /// Output JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Tag a byte range with a human-readable label, persisted in <file>.tiltshift.toml.
     ///
     /// Annotations survive re-analysis and are shown as ANNOTATED spans in the LAYOUT
@@ -258,6 +282,13 @@ fn main() -> anyhow::Result<()> {
             block_size,
             json,
         } => cmd_corpus(&files, threshold, block_size, json),
+        Command::Anomaly {
+            target,
+            refs,
+            threshold,
+            block_size,
+            json,
+        } => cmd_anomaly(&target, &refs, threshold, block_size, json),
         Command::Annotate {
             file,
             offset,
@@ -1858,70 +1889,65 @@ fn cmd_diff(
     Ok(())
 }
 
-fn cmd_corpus(
-    paths: &[PathBuf],
-    threshold: f64,
+struct FileEntry {
+    path: PathBuf,
+    size: usize,
+    signals: Vec<Signal>,
+}
+
+fn load_file_entry(
+    path: &PathBuf,
     block_size: usize,
-    json: bool,
-) -> anyhow::Result<()> {
-    use std::collections::HashMap;
-
-    if paths.len() < 2 {
-        anyhow::bail!("corpus requires at least 2 files");
+    mc: &tiltshift::corpus::Corpus,
+) -> anyhow::Result<Option<FileEntry>> {
+    let mapped = MappedFile::open(path)?;
+    let data = mapped.bytes();
+    let file_size = data.len();
+    if file_size == 0 {
+        eprintln!("warning: skipping empty file: {}", path.display());
+        return Ok(None);
     }
 
-    let mc = corpus::load();
+    let mut state = session::load(path)
+        .filter(|s| s.file_size == file_size)
+        .unwrap_or_else(|| session::SessionState::new(file_size));
 
-    // Load each file; build per-file signal index.
-    struct FileEntry {
-        path: PathBuf,
-        size: usize,
-        signals: Vec<Signal>,
-    }
-
-    let mut entries: Vec<FileEntry> = Vec::new();
-    for path in paths {
-        let mapped = MappedFile::open(path)?;
-        let data = mapped.bytes();
-        let file_size = data.len();
-        if file_size == 0 {
-            eprintln!("warning: skipping empty file: {}", path.display());
-            continue;
+    let sigs = if state.signals.is_empty() {
+        let extracted = signals::extract_all(data, block_size, mc);
+        state.signals.clone_from(&extracted);
+        if let Err(e) = session::save(path, &state) {
+            eprintln!("warning: could not save session state: {e}");
         }
+        extracted
+    } else {
+        state.signals.clone()
+    };
 
-        let mut state = session::load(path)
-            .filter(|s| s.file_size == file_size)
-            .unwrap_or_else(|| session::SessionState::new(file_size));
+    Ok(Some(FileEntry {
+        path: path.clone(),
+        size: file_size,
+        signals: sigs,
+    }))
+}
 
-        let sigs = if state.signals.is_empty() {
-            let extracted = signals::extract_all(data, block_size, &mc);
-            state.signals.clone_from(&extracted);
-            if let Err(e) = session::save(path, &state) {
-                eprintln!("warning: could not save session state: {e}");
-            }
-            extracted
-        } else {
-            state.signals.clone()
-        };
-
-        entries.push(FileEntry {
-            path: path.clone(),
-            size: file_size,
-            signals: sigs,
-        });
-    }
-
-    if entries.len() < 2 {
-        anyhow::bail!("corpus requires at least 2 non-empty files");
-    }
+/// Build consensus key set and representative signals from a slice of file entries.
+///
+/// Returns `(consensus_keys, consensus_signals)` where `consensus_keys` is the set of
+/// `(kind_label, offset)` pairs present in at least `ceil(threshold * entries.len())`
+/// files, and `consensus_signals` is the highest-confidence representative for each key,
+/// sorted by offset.
+fn build_consensus(
+    entries: &[FileEntry],
+    threshold: f64,
+) -> (std::collections::HashSet<(String, usize)>, Vec<Signal>) {
+    use std::collections::HashMap;
 
     let n = entries.len();
     let min_count = (threshold * n as f64).ceil() as usize;
-    let common_size = entries.iter().map(|e| e.size).min().unwrap_or(0);
 
-    // Build per-file signal index: (kind_label, offset) → highest-confidence signal.
+    // Per-file signal index: (kind_label, offset) → highest-confidence signal.
     let mut per_file: Vec<HashMap<(String, usize), Signal>> = Vec::with_capacity(n);
-    for entry in &entries {
+    for entry in entries {
         let mut index: HashMap<(String, usize), Signal> = HashMap::new();
         for sig in &entry.signals {
             let key = (
@@ -1946,29 +1972,28 @@ fn cmd_corpus(
         }
     }
 
-    // Consensus: keys present in >= min_count files; take highest-confidence representative.
+    // Consensus: keys present in >= min_count files.
     let consensus_keys: std::collections::HashSet<(String, usize)> = key_counts
         .iter()
         .filter(|(_, &cnt)| cnt >= min_count)
         .map(|(k, _)| k.clone())
         .collect();
 
-    let mut consensus_signals: Vec<Signal> = {
-        let mut best: HashMap<(String, usize), Signal> = HashMap::new();
-        for index in &per_file {
-            for (key, sig) in index {
-                if consensus_keys.contains(key) {
-                    let keep = best
-                        .get(key)
-                        .is_none_or(|prev| sig.confidence > prev.confidence);
-                    if keep {
-                        best.insert(key.clone(), sig.clone());
-                    }
+    // Take highest-confidence representative per consensus key.
+    let mut best: HashMap<(String, usize), Signal> = HashMap::new();
+    for index in &per_file {
+        for (key, sig) in index {
+            if consensus_keys.contains(key) {
+                let keep = best
+                    .get(key)
+                    .is_none_or(|prev| sig.confidence > prev.confidence);
+                if keep {
+                    best.insert(key.clone(), sig.clone());
                 }
             }
         }
-        best.into_values().collect()
-    };
+    }
+    let mut consensus_signals: Vec<Signal> = best.into_values().collect();
     consensus_signals.sort_by(|a, b| {
         a.region
             .offset
@@ -1976,18 +2001,60 @@ fn cmd_corpus(
             .then(b.confidence.partial_cmp(&a.confidence).unwrap())
     });
 
+    (consensus_keys, consensus_signals)
+}
+
+fn cmd_corpus(
+    paths: &[PathBuf],
+    threshold: f64,
+    block_size: usize,
+    json: bool,
+) -> anyhow::Result<()> {
+    if paths.len() < 2 {
+        anyhow::bail!("corpus requires at least 2 files");
+    }
+
+    let mc = corpus::load();
+
+    let mut entries: Vec<FileEntry> = Vec::new();
+    for path in paths {
+        if let Some(entry) = load_file_entry(path, block_size, &mc)? {
+            entries.push(entry);
+        }
+    }
+
+    if entries.len() < 2 {
+        anyhow::bail!("corpus requires at least 2 non-empty files");
+    }
+
+    let n = entries.len();
+    let common_size = entries.iter().map(|e| e.size).min().unwrap_or(0);
+    let min_count = ((threshold * n as f64).ceil() as usize).max(1);
+
+    let (consensus_keys, consensus_signals) = build_consensus(&entries, threshold);
     let schema = hypothesis::build(&consensus_signals, common_size);
 
     // Per-file divergences: signals NOT in the consensus key set.
     let per_file_divergences: Vec<(String, Vec<Signal>)> = entries
         .iter()
-        .zip(per_file.iter())
-        .map(|(entry, index)| {
-            let mut divs: Vec<Signal> = index
-                .iter()
-                .filter(|(key, _)| !consensus_keys.contains(key))
-                .map(|(_, sig)| sig.clone())
-                .collect();
+        .map(|entry| {
+            use std::collections::HashMap;
+            let mut index: HashMap<(String, usize), Signal> = HashMap::new();
+            for sig in &entry.signals {
+                let key = (
+                    hypothesis::signal_kind_label(&sig.kind).to_string(),
+                    sig.region.offset,
+                );
+                if !consensus_keys.contains(&key) {
+                    let keep = index
+                        .get(&key)
+                        .is_none_or(|prev| sig.confidence > prev.confidence);
+                    if keep {
+                        index.insert(key, sig.clone());
+                    }
+                }
+            }
+            let mut divs: Vec<Signal> = index.into_values().collect();
             divs.sort_by(|a, b| {
                 a.region
                     .offset
@@ -2011,7 +2078,7 @@ fn cmd_corpus(
             "hypotheses": schema.hypotheses,
             "per_file_divergences": per_file_divergences.iter().map(|(path, divs)| {
                 (path.clone(), divs.clone())
-            }).collect::<HashMap<_, _>>(),
+            }).collect::<std::collections::HashMap<_, _>>(),
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
@@ -2136,6 +2203,211 @@ fn cmd_corpus(
             println!(
                 "    … {} more (use --json for full list)",
                 divs.len() - DIV_CAP
+            );
+        }
+    }
+    println!();
+    Ok(())
+}
+
+fn cmd_anomaly(
+    target: &PathBuf,
+    refs: &[PathBuf],
+    threshold: f64,
+    block_size: usize,
+    json: bool,
+) -> anyhow::Result<()> {
+    if refs.len() < 2 {
+        anyhow::bail!("anomaly requires at least 2 reference files");
+    }
+
+    let mc = corpus::load();
+
+    // Load target.
+    let target_entry = load_file_entry(target, block_size, &mc)?
+        .ok_or_else(|| anyhow::anyhow!("target file is empty"))?;
+
+    // Load reference files.
+    let mut ref_entries: Vec<FileEntry> = Vec::new();
+    for path in refs {
+        if let Some(entry) = load_file_entry(path, block_size, &mc)? {
+            ref_entries.push(entry);
+        }
+    }
+    if ref_entries.len() < 2 {
+        anyhow::bail!("anomaly requires at least 2 non-empty reference files");
+    }
+
+    let n_refs = ref_entries.len();
+    let (consensus_keys, consensus_signals) = build_consensus(&ref_entries, threshold);
+
+    // Build target signal index: (kind_label, offset) → highest-confidence signal.
+    let target_index: std::collections::HashMap<(String, usize), Signal> = {
+        use std::collections::HashMap;
+        let mut index: HashMap<(String, usize), Signal> = HashMap::new();
+        for sig in &target_entry.signals {
+            let key = (
+                hypothesis::signal_kind_label(&sig.kind).to_string(),
+                sig.region.offset,
+            );
+            let keep = index
+                .get(&key)
+                .is_none_or(|prev| sig.confidence > prev.confidence);
+            if keep {
+                index.insert(key, sig.clone());
+            }
+        }
+        index
+    };
+
+    // Unexpected: in target but not in consensus model.
+    let mut unexpected: Vec<Signal> = target_index
+        .iter()
+        .filter(|(key, _)| !consensus_keys.contains(*key))
+        .map(|(_, sig)| sig.clone())
+        .collect();
+    unexpected.sort_by(|a, b| {
+        a.region
+            .offset
+            .cmp(&b.region.offset)
+            .then(b.confidence.partial_cmp(&a.confidence).unwrap())
+    });
+
+    // Missing: in all refs (count == n_refs) but absent from target.
+    // Build per-ref key counts for "all refs" determination.
+    let all_ref_keys: std::collections::HashSet<(String, usize)> = {
+        use std::collections::HashMap;
+        let mut counts: HashMap<(String, usize), usize> = HashMap::new();
+        for entry in &ref_entries {
+            let mut seen: std::collections::HashSet<(String, usize)> =
+                std::collections::HashSet::new();
+            for sig in &entry.signals {
+                let key = (
+                    hypothesis::signal_kind_label(&sig.kind).to_string(),
+                    sig.region.offset,
+                );
+                if seen.insert(key.clone()) {
+                    *counts.entry(key).or_insert(0) += 1;
+                }
+            }
+        }
+        counts
+            .into_iter()
+            .filter(|(_, cnt)| *cnt == n_refs)
+            .map(|(k, _)| k)
+            .collect()
+    };
+
+    // Missing signals: universal in refs, absent from target; use consensus representative.
+    let consensus_map: std::collections::HashMap<(String, usize), &Signal> = consensus_signals
+        .iter()
+        .map(|sig| {
+            let key = (
+                hypothesis::signal_kind_label(&sig.kind).to_string(),
+                sig.region.offset,
+            );
+            (key, sig)
+        })
+        .collect();
+
+    let mut missing: Vec<Signal> = all_ref_keys
+        .iter()
+        .filter(|key| !target_index.contains_key(*key))
+        .filter_map(|key| consensus_map.get(key).copied().cloned())
+        .collect();
+    missing.sort_by(|a, b| {
+        a.region
+            .offset
+            .cmp(&b.region.offset)
+            .then(b.confidence.partial_cmp(&a.confidence).unwrap())
+    });
+
+    let anomaly_score = unexpected.len() + missing.len();
+    let anomaly_class = match anomaly_score {
+        0 => "clean",
+        1..=3 => "low",
+        4..=9 => "medium",
+        _ => "high",
+    };
+
+    if json {
+        let output = serde_json::json!({
+            "target": {
+                "path": target_entry.path.display().to_string(),
+                "size": target_entry.size,
+            },
+            "refs": ref_entries.iter().map(|e| serde_json::json!({
+                "path": e.path.display().to_string(),
+                "size": e.size,
+            })).collect::<Vec<_>>(),
+            "threshold": threshold,
+            "consensus_signals": consensus_signals.len(),
+            "anomaly_score": anomaly_score,
+            "anomaly_class": anomaly_class,
+            "unexpected": &unexpected,
+            "missing": &missing,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    // ── Text output ──────────────────────────────────────────────────────────
+    let bar = "═".repeat(60);
+    println!("{bar}");
+    println!("  tiltshift anomaly  —  {}", target_entry.path.display());
+    println!("{bar}");
+    println!();
+    println!(
+        "  Target:  {}   {} bytes",
+        target_entry.path.display(),
+        target_entry.size
+    );
+    let threshold_pct = (threshold * 100.0) as u32;
+    println!(
+        "  Model:   {} reference file(s), threshold {threshold_pct}%, {} consensus signal(s)",
+        n_refs,
+        consensus_signals.len(),
+    );
+    println!();
+    println!("  Anomaly score:  {anomaly_score}  ({anomaly_class})");
+
+    const UNEXPECTED_CAP: usize = 20;
+    println!(
+        "\nUNEXPECTED SIGNALS  ({} — in target, not in model)",
+        unexpected.len()
+    );
+    println!("{}", "─".repeat(60));
+    if unexpected.is_empty() {
+        println!("  (none)");
+    } else {
+        for sig in unexpected.iter().take(UNEXPECTED_CAP) {
+            println!("{}", format_signal_summary(sig));
+        }
+        if unexpected.len() > UNEXPECTED_CAP {
+            println!(
+                "  … {} more (use --json for full list)",
+                unexpected.len() - UNEXPECTED_CAP
+            );
+        }
+    }
+
+    const MISSING_CAP: usize = 10;
+    println!(
+        "\nMISSING SIGNALS  ({} — in all {} ref(s), absent from target)",
+        missing.len(),
+        n_refs,
+    );
+    println!("{}", "─".repeat(60));
+    if missing.is_empty() {
+        println!("  (none)");
+    } else {
+        for sig in missing.iter().take(MISSING_CAP) {
+            println!("{}  (expected from model)", format_signal_summary(sig));
+        }
+        if missing.len() > MISSING_CAP {
+            println!(
+                "  … {} more (use --json for full list)",
+                missing.len() - MISSING_CAP
             );
         }
     }

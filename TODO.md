@@ -64,7 +64,7 @@
 - [x] Structural delta (`diff(file_a, file_b)`) — field-level, not byte-level; fields that vary=data, identical=structural (DESIGN: Multi-file signals)  ✓ done (`tiltshift diff`)
 - [x] Cross-file magic correlation (same bytes at same offset across samples) (DESIGN: Multi-file signals)  ✓ done (covered by `tiltshift corpus`)
 - [x] Corpus model builder (feed N known-format files, extract structural model) — known formats are the training data and validation set (DESIGN: Known vs unknown formats)  ✓ done (`tiltshift corpus`)
-- [ ] Anomaly detection mode (file vs corpus model → what doesn't fit) — steganography detection is a natural byproduct (DESIGN: Scope)
+- [x] Anomaly detection mode (file vs corpus model → what doesn't fit) — steganography detection is a natural byproduct (DESIGN: Scope)  ✓ done (`tiltshift anomaly`)
 
 ## Known format library
 

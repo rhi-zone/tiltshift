@@ -52,6 +52,7 @@ export default withMermaid(
               { text: 'descend', link: '/cli/descend' },
               { text: 'diff', link: '/cli/diff' },
               { text: 'corpus', link: '/cli/corpus' },
+              { text: 'anomaly', link: '/cli/anomaly' },
               { text: 'annotate', link: '/cli/annotate' },
             ],
           },
