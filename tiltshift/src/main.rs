@@ -76,13 +76,16 @@ enum Command {
         json: bool,
     },
 
-    /// Copy a file to <file>.unk with all known magic bytes zeroed out.
+    /// Copy files to <file>.unk with all known magic bytes zeroed out.
     ///
-    /// Produces an opaque blob useful for testing signal extractors against
+    /// Accepts multiple files and glob patterns (e.g. "*.png" "dir/**/*.bin").
+    /// Each input produces a separate <input>.unk file alongside the original.
+    /// Produces opaque blobs useful for testing signal extractors against
     /// files whose format has been deliberately obscured.
     Obfuscate {
-        file: PathBuf,
-        /// Overwrite the output file if it already exists.
+        /// Files or glob patterns to obfuscate.
+        files: Vec<String>,
+        /// Overwrite output files if they already exist.
         #[arg(long)]
         force: bool,
     },
@@ -372,7 +375,7 @@ fn main() -> anyhow::Result<()> {
             context,
             json,
         } => cmd_scan(&file, &pattern, context, json),
-        Command::Obfuscate { file, force } => cmd_obfuscate(&file, force),
+        Command::Obfuscate { files, force } => cmd_obfuscate_multi(&files, force),
         Command::Region {
             file,
             offset,
@@ -1659,11 +1662,59 @@ fn parse_offset(s: &str) -> Option<usize> {
     }
 }
 
-fn cmd_obfuscate(path: &PathBuf, force: bool) -> anyhow::Result<()> {
+fn cmd_obfuscate_multi(patterns: &[String], force: bool) -> anyhow::Result<()> {
+    if patterns.is_empty() {
+        anyhow::bail!("no files specified");
+    }
+
+    // Expand each argument: glob patterns (containing *, ?, [) are expanded;
+    // plain paths are used as-is and will error if missing when opened.
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for pat in patterns {
+        let is_glob = pat.contains(['*', '?', '[']);
+        if is_glob {
+            let matches: Vec<_> = glob::glob(pat)
+                .map_err(|e| anyhow::anyhow!("invalid glob {pat:?}: {e}"))?
+                .collect();
+            if matches.is_empty() {
+                eprintln!("tiltshift: warning: glob {pat:?} matched no files");
+                continue;
+            }
+            for result in matches {
+                let p = result.map_err(|e| anyhow::anyhow!("glob error: {e}"))?;
+                if p.is_file() {
+                    paths.push(p);
+                }
+            }
+        } else {
+            paths.push(PathBuf::from(pat));
+        }
+    }
+
+    if paths.is_empty() {
+        anyhow::bail!("no files matched");
+    }
+
+    let corpus = corpus::load();
+    let mut errors = 0usize;
+
+    for path in &paths {
+        if let Err(e) = obfuscate_one(path, &corpus, force) {
+            eprintln!("tiltshift: {}: {e}", path.display());
+            errors += 1;
+        }
+    }
+
+    if errors > 0 {
+        anyhow::bail!("{errors} file(s) failed");
+    }
+    Ok(())
+}
+
+fn obfuscate_one(path: &PathBuf, corpus: &corpus::Corpus, force: bool) -> anyhow::Result<()> {
     let mapped = MappedFile::open(path)?;
     let data = mapped.bytes();
 
-    // Build output path: append .unk suffix
     let out_path = {
         let mut s = path.as_os_str().to_owned();
         s.push(".unk");
@@ -1672,14 +1723,13 @@ fn cmd_obfuscate(path: &PathBuf, force: bool) -> anyhow::Result<()> {
 
     if out_path.exists() && !force {
         anyhow::bail!(
-            "output file already exists: {}  (use --force to overwrite)",
+            "output already exists: {}  (use --force to overwrite)",
             out_path.display()
         );
     }
 
-    let corpus = corpus::load();
     let mut buf = data.to_vec();
-    let mut zeroed: Vec<(usize, String, usize)> = Vec::new(); // (offset, name, magic_len)
+    let mut zeroed: Vec<(usize, String, usize)> = Vec::new();
 
     for entry in &corpus.formats {
         let Ok(magic) = entry.magic_bytes() else {
@@ -1688,9 +1738,7 @@ fn cmd_obfuscate(path: &PathBuf, force: bool) -> anyhow::Result<()> {
         if magic.is_empty() {
             continue;
         }
-        let hits = search::find_all(data, &magic);
-        for offset in hits {
-            // Zero the magic bytes in the output buffer
+        for offset in search::find_all(data, &magic) {
             for b in buf[offset..offset + magic.len()].iter_mut() {
                 *b = 0x00;
             }
@@ -1717,8 +1765,6 @@ fn cmd_obfuscate(path: &PathBuf, force: bool) -> anyhow::Result<()> {
             println!("  0x{offset:08x}  {name}  ({len} bytes)");
         }
     }
-
-    println!();
     println!("  output: {}", out_path.display());
     println!();
     Ok(())
