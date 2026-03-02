@@ -116,7 +116,7 @@
 ## Stretch
 
 - [x] `tiltshift obfuscate <file>` — copy file to `<filename>.unk` then zero out known magic bytes to produce an opaque blob for analysis testing  ✓ done
-- [ ] **`length_prefix` stride extension** — current scanner requires exact end-to-end chaining (gap=0); extend to fixed-stride sequences (gap=K bytes of interleaved struct fields): collect all valid blob candidates into a HashMap, histogram inter-blob gaps, find chains of ≥3 blobs with consistent gap>0; add `stride: usize` field to `LengthPrefixedBlob` (0 = exact, N = N-byte gap)
+- [x] **`length_prefix` stride extension** — histogram over inter-blob gaps finds consistent non-zero gaps; `inter_blob_gap: usize` field added to `LengthPrefixedBlob` (0 = exact, N = N-byte gap); ≥3 blobs required for stride>0  ✓ done (`69b026a`)
 - [ ] V8 compressed pointer cluster — u32 values with low bit=1 (tagged pointers), narrow upper-32 range (shared cage base); emit `CompressedPointerCluster` signal (future extension of offset graph)
 - [ ] REPL / interactive session for iterative exploration
 - [ ] normalize integration (structural view of tiltshift's own output) — same pattern, different domain (DESIGN: Relation to rhi ecosystem)
