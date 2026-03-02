@@ -90,7 +90,7 @@
 - [x] `tiltshift diff <file_a> <file_b>` — structural delta (DESIGN: Primitive API `diff`)  ✓ done
 - [ ] `tiltshift corpus add <format> <files...>` — add to known format library
 - [x] JSON output mode for agent consumption (`--json` flag on `analyze`)
-- [ ] Confidence thresholds / verbosity flags
+- [x] Confidence thresholds / verbosity flags  ✓ done (`9ed3ecb`, `--min-confidence`, `--verbose`)
 
 ## Stretch
 
