@@ -13,7 +13,8 @@
 //! For W in {1, 2, 3, 4, 8}: partition bytes at entry_point into opcode
 //! positions (every W bytes) and operand positions.  Score =
 //! H(operand_bytes) − H(opcode_bytes).  If the best score > 0.5 bits, that W
-//! is a candidate fixed width.
+//! is a candidate fixed width.  The score is retained as `entropy_sep_norm`
+//! (capped at 4 bits → 0.0–1.0) and contributes to confidence directly.
 //!
 //! **Phase 2 — variable-width bootstrap**
 //! Walk from entry_point treating each byte as an opcode.  For unknown opcodes
@@ -23,6 +24,19 @@
 //! **Phase 3 — jump target validation**
 //! Collect 1–4 byte little-endian operand values within region bounds; count
 //! those that land on an instruction boundary.
+//!
+//! **Frequency analysis**
+//! After Phase 2, build a frequency histogram of opcode bytes at instruction
+//! boundaries.  Two metrics are derived:
+//!
+//! - `distinct_opcodes` — number of unique opcode bytes seen (display only).
+//! - `top5_dominance` — fraction of all instructions using the 5 most common
+//!   opcodes.  Real instruction sets are heavily skewed (common instructions
+//!   like load/push/return dominate); greedy-decoded random data spreads
+//!   uniformly across many opcodes.  A cyclic stream decoded with greedy
+//!   width=4 produces ~102 equally-frequent opcodes → top-5 dominance ≈ 5%.
+//!   A 3-opcode synthetic stream → top-5 dominance = 100%.  This term cannot
+//!   be gamed by the greedy bootstrap the way `distinct/256` can.
 
 use crate::types::{Region, Signal, SignalKind};
 
@@ -39,6 +53,12 @@ const MIN_DATA_LEN: usize = 32;
 /// Minimum entropy separation (bits) between opcode and operand positions
 /// to declare a fixed-width winner.
 const FIXED_WIDTH_THRESHOLD: f64 = 0.5;
+/// Minimum fraction of all decoded instructions that must use the top-5 most
+/// common opcodes.  Real instruction sets are always skewed (a handful of
+/// common instructions dominate); random or periodic data decoded with the
+/// greedy bootstrap spreads instructions across many opcodes → top-5 ≤ 5–16%.
+/// This gate is the primary defence against false positives.
+const MIN_TOP5_DOMINANCE: f64 = 0.20;
 
 // ── Shannon entropy helper ────────────────────────────────────────────────────
 
@@ -225,6 +245,10 @@ pub fn scan_bytecode(data: &[u8], entry_point: usize) -> Vec<Signal> {
     // ── Phase 1: fixed-width candidate ───────────────────────────────────────
     let fixed_result = best_fixed_width(data, entry_point);
     let fixed_width = fixed_result.map(|(w, _)| w);
+    // Normalise the separation score to [0.0, 1.0]; 4 bits is already strong.
+    let entropy_sep_norm = fixed_result
+        .map(|(_, score)| (score / 4.0).min(1.0))
+        .unwrap_or(0.0);
 
     // Build initial grammar from fixed-width discovery.
     let mut grammar = [None::<u8>; 256];
@@ -300,10 +324,43 @@ pub fn scan_bytecode(data: &[u8], entry_point: usize) -> Vec<Signal> {
     // ── Phase 3: jump target validation ──────────────────────────────────────
     let jump_val = jump_validity(data, &all_boundaries, &grammar);
 
+    // ── Frequency analysis: top-5 opcode dominance ───────────────────────────
+    // Build a frequency histogram of opcode bytes at instruction boundaries,
+    // then compute what fraction of all instructions use the top-5 opcodes.
+    let mut opcode_freq = [0u32; 256];
+    for &pos in &all_boundaries {
+        if pos < data.len() {
+            opcode_freq[data[pos] as usize] += 1;
+        }
+    }
+    let total_instructions = instruction_count as u32;
+    let mut freq_sorted: Vec<u32> = opcode_freq.iter().copied().filter(|&f| f > 0).collect();
+    freq_sorted.sort_unstable_by(|a, b| b.cmp(a));
+    let distinct_opcodes = freq_sorted.len();
+    let top5_count: u32 = freq_sorted.iter().take(5).sum();
+    let top5_dominance = if total_instructions > 0 {
+        top5_count as f64 / total_instructions as f64
+    } else {
+        0.0
+    };
+
+    // Hard gate: random and periodic data decoded with greedy width=4 bootstrap
+    // spread instructions across many opcodes → top-5 ≤ ~16%.  Real instruction
+    // sets always exceed 20% because a small number of common instructions
+    // (load, push, return, branch, …) dominate any real program.
+    if top5_dominance < MIN_TOP5_DOMINANCE {
+        return vec![];
+    }
+
     // ── Confidence ───────────────────────────────────────────────────────────
-    let confidence = decode_coverage * 0.70
-        + jump_val.unwrap_or(0.0) * 0.20
-        + if fixed_width.is_some() { 0.05 } else { 0.0 };
+    // Weights: coverage 0.55, jump_validity 0.15, entropy_sep 0.15,
+    //          top5_dominance 0.15.
+    // Greedy-decoded random data: top-5 opcodes ≈ 5% → dominance ≈ 0.05,
+    // sep = 0, coverage ≈ 1.0 → conf ≈ 0.55 + 0.008 = 0.558 < threshold 0.60.
+    let confidence = decode_coverage * 0.55
+        + jump_val.unwrap_or(0.0) * 0.15
+        + entropy_sep_norm * 0.15
+        + top5_dominance * 0.15;
 
     if confidence < min_conf {
         return vec![];
@@ -343,8 +400,12 @@ pub fn scan_bytecode(data: &[u8], entry_point: usize) -> Vec<Signal> {
             .unwrap_or_else(|| "no jump targets; ".to_string());
         format!(
             "{fw_part}{instruction_count} instructions decoded from offset {entry_point}; \
-             coverage {:.0}%; {jv_part}confidence {:.0}%",
+             coverage {:.0}%; {jv_part}\
+             {distinct_opcodes} distinct opcodes (top-5 dominance {:.0}%); \
+             entropy sep {:.2} bits; confidence {:.0}%",
             decode_coverage * 100.0,
+            top5_dominance * 100.0,
+            entropy_sep_norm * 4.0,
             confidence * 100.0
         )
     };
@@ -405,21 +466,57 @@ mod tests {
         assert!(*decode_coverage >= 0.60, "coverage too low");
     }
 
+    /// LCG pseudo-random sequence — approximates independently sampled bytes.
+    fn make_pseudorandom(n: usize) -> Vec<u8> {
+        let mut x: u64 = 0x123456789ABCDE;
+        (0..n)
+            .map(|_| {
+                x = x
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (x >> 33) as u8
+            })
+            .collect()
+    }
+
     #[test]
-    fn random_data_does_not_emit() {
-        // Pseudo-random data: coverage will be high but jump validity low, and
-        // phase 1 score won't separate opcodes from operands cleanly.
-        // For a truly uniform stream, phase 1 gives score ≈ 0 (both uniform).
+    fn pseudorandom_data_does_not_emit() {
+        // LCG bytes spread instructions across many opcodes → top-5 dominance
+        // well below MIN_TOP5_DOMINANCE (0.20) → hard gate rejects it.
+        let data = make_pseudorandom(512);
+        let sigs = scan_bytecode(&data, 0);
+        assert!(
+            sigs.is_empty(),
+            "pseudo-random data should not emit (conf={:.3})",
+            sigs.first().map_or(0.0, |s| s.confidence)
+        );
+    }
+
+    #[test]
+    fn cyclic_data_does_not_emit() {
+        // 0x00–0xFF repeated: periodic structure may win a fixed-width slot, but
+        // the instruction distribution is still spread → top-5 dominance low.
         let data: Vec<u8> = (0u8..=255).cycle().take(512).collect();
         let sigs = scan_bytecode(&data, 0);
-        // May or may not emit — what matters is coverage check.  For a purely
-        // cyclic stream with W=1 there's no operand separation; W>1 divides
-        // a cyclic stream evenly so H(opcodes) ≈ H(operands).  The variable-
-        // width phase will achieve high coverage but low jump validity and
-        // borderline confidence, so the unanchored threshold (0.60) should
-        // filter it out OR coverage passes but jump validity is 0 → conf ≈ 0.70.
-        // This test just verifies we don't panic; the signal may or may not emit.
-        let _ = sigs;
+        assert!(
+            sigs.is_empty(),
+            "cyclic 0-255 stream should not emit (conf={:.3})",
+            sigs.first().map_or(0.0, |s| s.confidence)
+        );
+    }
+
+    #[test]
+    fn fixed_width_2_has_high_concentration() {
+        // Only 3 distinct opcodes used → concentration ≈ 0.99; should lift confidence.
+        let data = make_fixed2_stream(40);
+        let sigs = scan_bytecode(&data, 0);
+        assert!(!sigs.is_empty());
+        // With 3 opcodes and varied operands, confidence should be well above threshold.
+        assert!(
+            sigs[0].confidence >= 0.70,
+            "confidence should be ≥ 0.70 with high concentration, got {:.3}",
+            sigs[0].confidence
+        );
     }
 
     #[test]
