@@ -98,12 +98,13 @@ Real-world validation on 608 obfuscated corpus files revealed the following rema
 - **Offset graph with very few edges (2 nodes, 1 edge) at 50% confidence**: too weak to be useful. Minimum edge count should probably be 3+, or confidence for 1-edge graphs should be ≤ 0.40.
 - **NumericValue power-of-two signals in sub-region LAYOUT**: generates many low-confidence signals in recursive descent. Already at 40% confidence, but still appears in top-20 for small files with many power-of-two pixel values.
 
+- **GIF false positive → "Protobuf-like"**: pat.unk and shy.unk are GIF89a files. After stripping the 6-byte magic, GIF's sub-block structure (1-byte size + data, repeat until 0x00) looks exactly like u8+u8 TLV. LZW-compressed pixel data has ~38% high bytes — just under the 40% suppression gate — so LEB128 detection runs on it and the Protobuf compound fires. GIF has distinctive features that could be detected: `0x21`/`0x2C`/`0x3B` block markers, 3×N-byte RGB palette immediately after screen descriptor, "NETSCAPE2.0" string in animated GIFs, LZW min-code-size byte before each image. The LZW high-byte fraction gate could be tuned to 35% to suppress on GIF.
+
 ### Positive findings (working well)
 - PNG detection via "IHDR" null-terminated string at offset 0x0c (stripped magic → still identified)
 - WebP detection via "VP8X" / "ALPH" chunk tags (ChunkSequence works without RIFF magic)
 - MP3 detection via "mLAME" encoder tag string
 - BytecodeStream detecting shader bytecode (assets.unk: W=8, 353 instrs, 100% coverage, 64-77% jump validity)
-- Protobuf-like detection (pat.unk: TLV+LEB128 compound, 111 records, 90% confidence)
 - PNG IDAT chunk stride detection (stride=16396 = 16384+12, ×86 occurrences for shewasahewasa.unk)
 
 ## Known format library
