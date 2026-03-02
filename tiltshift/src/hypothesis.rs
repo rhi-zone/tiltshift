@@ -398,6 +398,42 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
             })
         }
 
+        SignalKind::BytecodeStream {
+            entry_point,
+            decode_coverage,
+            jump_validity,
+            instruction_count,
+            fixed_width,
+            ..
+        } => {
+            let fw_label = fixed_width
+                .map(|w| format!(", fixed-width W={w}"))
+                .unwrap_or_default();
+            let jv_label = jump_validity
+                .map(|j| format!(", jump validity {:.0}%", j * 100.0))
+                .unwrap_or_default();
+            Some(Hypothesis {
+                region: sig.region.clone(),
+                label: format!(
+                    "Bytecode stream — {instruction_count} instructions, \
+                     {:.0}% coverage{fw_label}",
+                    decode_coverage * 100.0
+                ),
+                confidence: sig.confidence,
+                reasoning: format!(
+                    "{instruction_count} instructions decoded from offset {entry_point} with \
+                     {:.0}% byte coverage{jv_label} — self-consistent grammar without format priors.",
+                    decode_coverage * 100.0
+                ),
+                signals: vec![sig.clone()],
+                alternatives: vec![(
+                    "coincidental opcode/operand separation".to_string(),
+                    (1.0 - sig.confidence).max(0.10),
+                )],
+                annotated: false,
+            })
+        }
+
         // NullTerminatedString: fully handled by compound_string_tables.
         // Everything else (EntropyBlock, Padding, ChiSquare, CompressionProbe,
         // NgramProfile) is either too fine-grained or handled in pass 2.
@@ -919,6 +955,7 @@ pub fn signal_kind_label(kind: &SignalKind) -> &'static str {
         SignalKind::PackedField { .. } => "packed nibble fields",
         SignalKind::NumericValue { .. } => "numeric value",
         SignalKind::OffsetGraph { .. } => "offset graph",
+        SignalKind::BytecodeStream { .. } => "bytecode stream",
     }
 }
 

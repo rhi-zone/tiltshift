@@ -1123,6 +1123,63 @@ fn cmd_analyze(
         }
     }
 
+    // ── Bytecode stream signals ───────────────────────────────────────────────
+    let bytecode_sigs: Vec<_> = all_signals
+        .iter()
+        .filter(|s| {
+            matches!(&s.kind, SignalKind::BytecodeStream { .. }) && s.confidence >= min_confidence
+        })
+        .collect();
+
+    if !bytecode_sigs.is_empty() {
+        println!("\nBYTECODE STREAMS");
+        println!("{}", "─".repeat(60));
+        for sig in &bytecode_sigs {
+            let SignalKind::BytecodeStream {
+                entry_point,
+                decode_coverage,
+                jump_validity,
+                instruction_count,
+                fixed_width,
+                opcode_widths,
+            } = &sig.kind
+            else {
+                unreachable!()
+            };
+            let fw_tag = fixed_width
+                .map(|w| format!("  fixed-W={w}"))
+                .unwrap_or_default();
+            let jv_tag = jump_validity
+                .map(|j| format!("  jump-valid={:.0}%", j * 100.0))
+                .unwrap_or_default();
+            println!(
+                "  {:8}  {} instr  cov={:.0}%{fw_tag}{jv_tag}  (confidence {:.0}%)",
+                sig.region.to_string(),
+                instruction_count,
+                decode_coverage * 100.0,
+                sig.confidence * 100.0
+            );
+            if !opcode_widths.is_empty() {
+                let pairs: String = opcode_widths
+                    .iter()
+                    .take(8)
+                    .map(|(op, w)| format!("{op:02x}+{w}"))
+                    .collect::<Vec<_>>()
+                    .join("  ");
+                let more = if opcode_widths.len() > 8 {
+                    format!("  …+{}", opcode_widths.len() - 8)
+                } else {
+                    String::new()
+                };
+                println!("            opcodes: {pairs}{more}");
+            }
+            if verbose {
+                println!("            entry: 0x{entry_point:06x}");
+                println!("            → {}", sig.reason);
+            }
+        }
+    }
+
     // ── Compression ratio probe (one per file) ───────────────────────────────
     if let Some(compress_sig) = all_signals.iter().find(|s| {
         matches!(&s.kind, SignalKind::CompressionProbe { .. }) && s.confidence >= min_confidence
@@ -1205,6 +1262,7 @@ fn cmd_analyze(
         .count();
     println!("  {} packed nibble field signal(s)", packed_count);
     println!("  {} offset graph signal(s)", offset_graph_sigs.len());
+    println!("  {} bytecode stream(s)", bytecode_sigs.len());
     println!("  {} repeating stride pattern(s)", stride_sigs.len());
     println!("  {} TLV sequence(s)", tlv_seqs.len());
     println!("  {} padding run(s)", padding_runs.len());

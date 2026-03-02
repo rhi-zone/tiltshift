@@ -269,6 +269,33 @@ pub enum SignalKind {
         /// Up to 8 representative (source, target) offset pairs from the component.
         sample_edges: Vec<(usize, usize)>,
     },
+    /// A region that decodes consistently as a sequence of variable- or
+    /// fixed-width instructions using a self-discovered grammar.
+    ///
+    /// Detection is format-agnostic: no hardcoded opcode tables.  Evidence is
+    /// purely self-consistency — the same grammar applied from `entry_point`
+    /// covers ≥ 60% of the region bytes without contradiction.
+    ///
+    /// Law: no format names (x86, JVM, WASM, etc.) are ever stored here.
+    BytecodeStream {
+        /// Byte offset (relative to region start) used as the instruction
+        /// decode entry point.
+        entry_point: usize,
+        /// Fraction of region bytes successfully decoded under the discovered
+        /// grammar (0.0–1.0).
+        decode_coverage: f64,
+        /// Fraction of branch operand values (those within region bounds) that
+        /// land on an instruction boundary.  `None` if no branch operands found.
+        jump_validity: Option<f64>,
+        /// Number of instructions decoded under the grammar.
+        instruction_count: usize,
+        /// If a single fixed instruction width W explains the region, `Some(W)`.
+        fixed_width: Option<usize>,
+        /// Up to 16 discovered (opcode_byte, operand_bytes) pairs, sorted by
+        /// opcode byte.
+        opcode_widths: Vec<(u8, u8)>,
+    },
+
     /// A u32 value with structural significance (power-of-two, file-size match,
     /// or a plausible in-bounds offset found in the header region).
     NumericValue {

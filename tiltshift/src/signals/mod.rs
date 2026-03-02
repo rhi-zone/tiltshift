@@ -1,4 +1,5 @@
 pub mod alignment;
+pub mod bytecode;
 pub mod chisq;
 pub mod chunk;
 pub mod compress;
@@ -36,6 +37,7 @@ pub fn extract_all(data: &[u8], entropy_block_size: usize, corpus: &Corpus) -> V
     signals.extend(varint::scan_varint(data));
     signals.extend(packed::scan_packed(data));
     signals.extend(offset_graph::scan_offset_graph(data));
+    signals.extend(bytecode::scan_bytecode(data, 0));
     signals.extend(entropy::entropy_map(
         data,
         entropy_block_size,
