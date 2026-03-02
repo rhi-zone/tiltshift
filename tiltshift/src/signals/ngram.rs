@@ -195,12 +195,32 @@ fn stride_patterns(data: &[u8]) -> Vec<Signal> {
     }
 
     // Analyse each pattern's offset list.
-    let mut signals: Vec<Signal> = offsets
+    let raw: Vec<Signal> = offsets
         .into_iter()
         .filter_map(|(ng, offs)| stride_signal(&ng, &offs, data.len()))
         .collect();
 
+    // Deduplicate by stride: multiple adjacent phase offsets often produce the
+    // same stride (e.g., every byte position in a repeating struct).  Keep only
+    // the highest-confidence representative per distinct stride value.
+    let mut best: HashMap<usize, Signal> = HashMap::new();
+    for sig in raw {
+        let stride = match &sig.kind {
+            SignalKind::RepeatedPattern { stride, .. } => *stride,
+            _ => continue,
+        };
+        let entry = best.entry(stride).or_insert_with(|| sig.clone());
+        // Prefer higher confidence; break ties by earlier start offset so the
+        // most "canonical" phase of the pattern wins.
+        if sig.confidence > entry.confidence
+            || (sig.confidence == entry.confidence && sig.region.offset < entry.region.offset)
+        {
+            *entry = sig;
+        }
+    }
+
     // Return highest-confidence signals first.
+    let mut signals: Vec<Signal> = best.into_values().collect();
     signals.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
     signals
 }

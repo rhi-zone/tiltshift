@@ -32,6 +32,11 @@ pub fn scan(data: &[u8], corpus: &Corpus) -> Vec<Signal> {
         let first = data[offset] as usize;
         for &idx in &index[first] {
             let (ref magic, entry) = parsed[idx];
+            // Short patterns (< 3 bytes) are too common in binary data to be
+            // meaningful at non-zero offsets — only match them at file start.
+            if offset > 0 && magic.len() < 3 {
+                continue;
+            }
             if data[offset..].starts_with(magic.as_slice()) {
                 let hex = magic
                     .iter()

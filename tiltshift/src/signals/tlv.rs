@@ -214,6 +214,15 @@ pub fn scan_tlv(data: &[u8]) -> Vec<Signal> {
     if data.len() < 4 {
         return Vec::new();
     }
+    // Compressed/encrypted data has ~50% bytes ≥ 0x80; at that density the
+    // simple TLV walking algorithm finds false chains throughout the stream.
+    // Skip detection when the global high-byte fraction exceeds 40%.
+    if data.len() >= 256 {
+        let high = data.iter().filter(|&&b| b >= 0x80).count();
+        if high * 10 > data.len() * 4 {
+            return Vec::new();
+        }
+    }
 
     let mut all_candidates: Vec<TlvCandidate> = Vec::new();
 

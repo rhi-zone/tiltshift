@@ -49,6 +49,16 @@ fn decode_leb128_u(data: &[u8], pos: usize) -> Option<(u64, usize)> {
 }
 
 fn scan_leb128(data: &[u8], out: &mut Vec<Signal>) {
+    // Fast exit: compressed/encrypted data has ~50% bytes ≥ 0x80.  At that
+    // density, accidental LEB128 runs vastly outnumber genuine ones.  Skip
+    // detection entirely when the global high-byte fraction exceeds 40%.
+    if data.len() >= 256 {
+        let high = data.iter().filter(|&&b| b >= 0x80).count();
+        if high * 10 > data.len() * 4 {
+            return;
+        }
+    }
+
     let mut i = 0;
     while i < data.len() {
         // Only start a run at a continuation byte (MSB=1) — first byte of a
