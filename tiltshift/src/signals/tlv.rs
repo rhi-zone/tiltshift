@@ -214,12 +214,12 @@ pub fn scan_tlv(data: &[u8]) -> Vec<Signal> {
     if data.len() < 4 {
         return Vec::new();
     }
-    // Compressed/encrypted data has ~50% bytes ≥ 0x80; at that density the
-    // simple TLV walking algorithm finds false chains throughout the stream.
-    // Skip detection when the global high-byte fraction exceeds 40%.
+    // In compressed/encrypted data, TLV walking finds false chains throughout.
+    // Empirically: DEFLATE ≈ 50% high bytes, LZW ≈ 38%, real protobuf ≈
+    // 15–25%.  Skip at > 35% to suppress both DEFLATE and LZW streams.
     if data.len() >= 256 {
         let high = data.iter().filter(|&&b| b >= 0x80).count();
-        if high * 10 > data.len() * 4 {
+        if high * 20 > data.len() * 7 {
             return Vec::new();
         }
     }
