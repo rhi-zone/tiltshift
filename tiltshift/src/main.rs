@@ -145,6 +145,27 @@ enum Command {
         json: bool,
     },
 
+    /// Extract a structural model from N binary files of the same format.
+    ///
+    /// Finds signals present across all (or most) files at the same offset.
+    /// Useful for reverse-engineering unknown binary formats from multiple samples.
+    /// Examples:
+    ///   tiltshift corpus sample1.bin sample2.bin sample3.bin
+    ///   tiltshift corpus --threshold 0.8 *.bin
+    Corpus {
+        /// Two or more files to analyse.
+        files: Vec<PathBuf>,
+        /// Min fraction of files a signal must appear in (0.0–1.0, default: 1.0).
+        #[arg(long, default_value_t = 1.0)]
+        threshold: f64,
+        /// Entropy block size in bytes (default: 256).
+        #[arg(long, default_value_t = 256)]
+        block_size: usize,
+        /// Output JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Tag a byte range with a human-readable label, persisted in <file>.tiltshift.toml.
     ///
     /// Annotations survive re-analysis and are shown as ANNOTATED spans in the LAYOUT
@@ -231,6 +252,12 @@ fn main() -> anyhow::Result<()> {
             block_size,
             json,
         } => cmd_diff(&file_a, &file_b, min_structural, block_size, json),
+        Command::Corpus {
+            files,
+            threshold,
+            block_size,
+            json,
+        } => cmd_corpus(&files, threshold, block_size, json),
         Command::Annotate {
             file,
             offset,
@@ -1827,6 +1854,291 @@ fn cmd_diff(
         }
     }
 
+    println!();
+    Ok(())
+}
+
+fn cmd_corpus(
+    paths: &[PathBuf],
+    threshold: f64,
+    block_size: usize,
+    json: bool,
+) -> anyhow::Result<()> {
+    use std::collections::HashMap;
+
+    if paths.len() < 2 {
+        anyhow::bail!("corpus requires at least 2 files");
+    }
+
+    let mc = corpus::load();
+
+    // Load each file; build per-file signal index.
+    struct FileEntry {
+        path: PathBuf,
+        size: usize,
+        signals: Vec<Signal>,
+    }
+
+    let mut entries: Vec<FileEntry> = Vec::new();
+    for path in paths {
+        let mapped = MappedFile::open(path)?;
+        let data = mapped.bytes();
+        let file_size = data.len();
+        if file_size == 0 {
+            eprintln!("warning: skipping empty file: {}", path.display());
+            continue;
+        }
+
+        let mut state = session::load(path)
+            .filter(|s| s.file_size == file_size)
+            .unwrap_or_else(|| session::SessionState::new(file_size));
+
+        let sigs = if state.signals.is_empty() {
+            let extracted = signals::extract_all(data, block_size, &mc);
+            state.signals.clone_from(&extracted);
+            if let Err(e) = session::save(path, &state) {
+                eprintln!("warning: could not save session state: {e}");
+            }
+            extracted
+        } else {
+            state.signals.clone()
+        };
+
+        entries.push(FileEntry {
+            path: path.clone(),
+            size: file_size,
+            signals: sigs,
+        });
+    }
+
+    if entries.len() < 2 {
+        anyhow::bail!("corpus requires at least 2 non-empty files");
+    }
+
+    let n = entries.len();
+    let min_count = (threshold * n as f64).ceil() as usize;
+    let common_size = entries.iter().map(|e| e.size).min().unwrap_or(0);
+
+    // Build per-file signal index: (kind_label, offset) → highest-confidence signal.
+    let mut per_file: Vec<HashMap<(String, usize), Signal>> = Vec::with_capacity(n);
+    for entry in &entries {
+        let mut index: HashMap<(String, usize), Signal> = HashMap::new();
+        for sig in &entry.signals {
+            let key = (
+                hypothesis::signal_kind_label(&sig.kind).to_string(),
+                sig.region.offset,
+            );
+            let keep = index
+                .get(&key)
+                .is_none_or(|prev| sig.confidence > prev.confidence);
+            if keep {
+                index.insert(key, sig.clone());
+            }
+        }
+        per_file.push(index);
+    }
+
+    // Count how many files contain each key.
+    let mut key_counts: HashMap<(String, usize), usize> = HashMap::new();
+    for index in &per_file {
+        for key in index.keys() {
+            *key_counts.entry(key.clone()).or_insert(0) += 1;
+        }
+    }
+
+    // Consensus: keys present in >= min_count files; take highest-confidence representative.
+    let consensus_keys: std::collections::HashSet<(String, usize)> = key_counts
+        .iter()
+        .filter(|(_, &cnt)| cnt >= min_count)
+        .map(|(k, _)| k.clone())
+        .collect();
+
+    let mut consensus_signals: Vec<Signal> = {
+        let mut best: HashMap<(String, usize), Signal> = HashMap::new();
+        for index in &per_file {
+            for (key, sig) in index {
+                if consensus_keys.contains(key) {
+                    let keep = best
+                        .get(key)
+                        .is_none_or(|prev| sig.confidence > prev.confidence);
+                    if keep {
+                        best.insert(key.clone(), sig.clone());
+                    }
+                }
+            }
+        }
+        best.into_values().collect()
+    };
+    consensus_signals.sort_by(|a, b| {
+        a.region
+            .offset
+            .cmp(&b.region.offset)
+            .then(b.confidence.partial_cmp(&a.confidence).unwrap())
+    });
+
+    let schema = hypothesis::build(&consensus_signals, common_size);
+
+    // Per-file divergences: signals NOT in the consensus key set.
+    let per_file_divergences: Vec<(String, Vec<Signal>)> = entries
+        .iter()
+        .zip(per_file.iter())
+        .map(|(entry, index)| {
+            let mut divs: Vec<Signal> = index
+                .iter()
+                .filter(|(key, _)| !consensus_keys.contains(key))
+                .map(|(_, sig)| sig.clone())
+                .collect();
+            divs.sort_by(|a, b| {
+                a.region
+                    .offset
+                    .cmp(&b.region.offset)
+                    .then(b.confidence.partial_cmp(&a.confidence).unwrap())
+            });
+            (entry.path.display().to_string(), divs)
+        })
+        .collect();
+
+    if json {
+        let output = serde_json::json!({
+            "files": entries.iter().map(|e| serde_json::json!({
+                "path": e.path.display().to_string(),
+                "size": e.size,
+            })).collect::<Vec<_>>(),
+            "threshold": threshold,
+            "min_count": min_count,
+            "common_prefix_length": common_size,
+            "consensus_signals": consensus_signals,
+            "hypotheses": schema.hypotheses,
+            "per_file_divergences": per_file_divergences.iter().map(|(path, divs)| {
+                (path.clone(), divs.clone())
+            }).collect::<HashMap<_, _>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    // ── Text output ──────────────────────────────────────────────────────────
+    let bar = "═".repeat(60);
+    println!("{bar}");
+    println!("  tiltshift corpus  —  {} files", n);
+    println!("{bar}");
+    println!();
+    let shortest = common_size;
+    for entry in &entries {
+        if entry.size == shortest {
+            println!("  {}   {} bytes", entry.path.display(), entry.size);
+        } else {
+            let diff = entry.size - shortest;
+            println!(
+                "  {}   {} bytes   ({diff} bytes longer than shortest)",
+                entry.path.display(),
+                entry.size
+            );
+        }
+    }
+    println!();
+    let threshold_pct = (threshold * 100.0) as u32;
+    println!("  Consensus threshold:  {threshold_pct}%  (signals in {min_count}/{n} files)");
+    println!("  Consensus signals:    {}", consensus_signals.len());
+    println!("  Common prefix length: {common_size} bytes");
+
+    // Hypotheses
+    const HYP_CAP: usize = 20;
+    if !schema.hypotheses.is_empty() {
+        println!("\nCONSENSUS HYPOTHESES");
+        println!("{}", "─".repeat(60));
+        for hyp in schema.hypotheses.iter().take(HYP_CAP) {
+            let region_str = if hyp.region.offset == 0 && hyp.region.len == common_size {
+                "[file]    ".to_string()
+            } else {
+                format!("{:10}", hyp.region)
+            };
+            println!(
+                "  {}  {}  (confidence {:.0}%)",
+                region_str,
+                hyp.label,
+                hyp.confidence * 100.0
+            );
+            if !hyp.reasoning.is_empty() {
+                println!("              why: {}", hyp.reasoning);
+            }
+            if hyp.signals.len() > 1 {
+                let desc = hyp
+                    .signals
+                    .iter()
+                    .map(|s| hypothesis::signal_kind_label(&s.kind))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("              via: {desc}");
+            }
+            if let Some((alt_label, alt_conf)) = hyp.alternatives.first() {
+                println!("              alt: {alt_label} ({:.0}%)", alt_conf * 100.0);
+            }
+        }
+        if schema.hypotheses.len() > HYP_CAP {
+            println!(
+                "  … {} more (use --json for full list)",
+                schema.hypotheses.len() - HYP_CAP
+            );
+        }
+    }
+
+    // Layout
+    const LAYOUT_CAP: usize = 10;
+    let layout = schema.layout();
+    let known_count = layout
+        .iter()
+        .filter(|s| matches!(s, LayoutSpan::Known(_)))
+        .count();
+    if known_count > 0 {
+        let unknown_count = layout.len() - known_count;
+        println!(
+            "\nCONSENSUS LAYOUT  ({common_size} bytes, {known_count} known, {unknown_count} unknown)"
+        );
+        println!("{}", "─".repeat(60));
+        for (shown, span) in layout.iter().enumerate() {
+            if shown >= LAYOUT_CAP {
+                println!("  … more spans (use --json for full list)");
+                break;
+            }
+            match span {
+                LayoutSpan::Known(hyp) => {
+                    let start = hyp.region.offset;
+                    let end = hyp.region.end().saturating_sub(1);
+                    println!(
+                        "  0x{start:06x}–0x{end:06x}  KNOWN    {} ({:.0}%)",
+                        hyp.label,
+                        hyp.confidence * 100.0
+                    );
+                }
+                LayoutSpan::Unknown(region) => {
+                    let start = region.offset;
+                    let end = region.end().saturating_sub(1);
+                    println!("  0x{start:06x}–0x{end:06x}  UNKNOWN  {} B", region.len);
+                }
+            }
+        }
+    }
+
+    // Per-file divergences
+    const DIV_CAP: usize = 10;
+    println!("\nPER-FILE DIVERGENCES");
+    println!("{}", "─".repeat(60));
+    for (path_str, divs) in &per_file_divergences {
+        println!("  {path_str}:  {} unique signal(s)", divs.len());
+        for sig in divs.iter().take(DIV_CAP) {
+            println!(
+                "    {}  (not in consensus)",
+                format_signal_summary(sig).trim_start()
+            );
+        }
+        if divs.len() > DIV_CAP {
+            println!(
+                "    … {} more (use --json for full list)",
+                divs.len() - DIV_CAP
+            );
+        }
+    }
     println!();
     Ok(())
 }

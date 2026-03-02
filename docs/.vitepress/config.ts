@@ -51,6 +51,7 @@ export default withMermaid(
               { text: 'region', link: '/cli/region' },
               { text: 'descend', link: '/cli/descend' },
               { text: 'diff', link: '/cli/diff' },
+              { text: 'corpus', link: '/cli/corpus' },
               { text: 'annotate', link: '/cli/annotate' },
             ],
           },
