@@ -32,6 +32,12 @@ enum Command {
         /// Maximum recursion depth for sub-region analysis (0 = none, default: 1).
         #[arg(long, default_value_t = 1)]
         depth: usize,
+        /// Only display signals and hypotheses at or above this confidence (0.0–1.0).
+        #[arg(long, default_value_t = 0.0)]
+        min_confidence: f64,
+        /// Show signal reasoning for all signal types and all alternative hypotheses.
+        #[arg(long)]
+        verbose: bool,
     },
 
     /// Show typed interpretations of bytes at an offset.
@@ -99,6 +105,12 @@ enum Command {
         /// Output JSON instead of human-readable text.
         #[arg(long)]
         json: bool,
+        /// Only display signals and hypotheses at or above this confidence (0.0–1.0).
+        #[arg(long, default_value_t = 0.0)]
+        min_confidence: f64,
+        /// Show signal reasoning for all signal types and all alternative hypotheses.
+        #[arg(long)]
+        verbose: bool,
     },
 
     /// Recursively analyze a specific byte range of a file.
@@ -122,6 +134,12 @@ enum Command {
         /// Maximum recursion depth (default: 1, 0 = no sub-region analysis).
         #[arg(long, default_value_t = 1)]
         depth: usize,
+        /// Only display signals and hypotheses at or above this confidence (0.0–1.0).
+        #[arg(long, default_value_t = 0.0)]
+        min_confidence: f64,
+        /// Show signal reasoning for all signal types and all alternative hypotheses.
+        #[arg(long)]
+        verbose: bool,
     },
 
     /// Compare the structure of two binary files.
@@ -164,6 +182,9 @@ enum Command {
         /// Output JSON instead of human-readable text.
         #[arg(long)]
         json: bool,
+        /// Only display signals and hypotheses at or above this confidence (0.0–1.0).
+        #[arg(long, default_value_t = 0.0)]
+        min_confidence: f64,
     },
 
     /// Check a file against a structural model built from reference samples.
@@ -188,6 +209,9 @@ enum Command {
         /// Output JSON instead of human-readable text.
         #[arg(long)]
         json: bool,
+        /// Only show anomalous signals at or above this confidence (0.0–1.0).
+        #[arg(long, default_value_t = 0.0)]
+        min_confidence: f64,
     },
 
     /// Tag a byte range with a human-readable label, persisted in <file>.tiltshift.toml.
@@ -242,7 +266,9 @@ fn main() -> anyhow::Result<()> {
             block_size,
             json,
             depth,
-        } => cmd_analyze(&file, block_size, json, depth),
+            min_confidence,
+            verbose,
+        } => cmd_analyze(&file, block_size, json, depth, min_confidence, verbose),
         Command::Probe { file, offset, len } => cmd_probe(&file, &offset, len),
         Command::Magic { action } => match action {
             MagicAction::Add { name, magic } => cmd_magic_add(&name, &magic),
@@ -261,14 +287,34 @@ fn main() -> anyhow::Result<()> {
             len,
             block_size,
             json,
-        } => cmd_region(&file, &offset, &len, block_size, json),
+            min_confidence,
+            verbose,
+        } => cmd_region(
+            &file,
+            &offset,
+            &len,
+            block_size,
+            json,
+            min_confidence,
+            verbose,
+        ),
         Command::Descend {
             file,
             offset,
             len,
             block_size,
             depth,
-        } => cmd_descend(&file, &offset, &len, block_size, depth),
+            min_confidence,
+            verbose,
+        } => cmd_descend(
+            &file,
+            &offset,
+            &len,
+            block_size,
+            depth,
+            min_confidence,
+            verbose,
+        ),
         Command::Diff {
             file_a,
             file_b,
@@ -281,14 +327,16 @@ fn main() -> anyhow::Result<()> {
             threshold,
             block_size,
             json,
-        } => cmd_corpus(&files, threshold, block_size, json),
+            min_confidence,
+        } => cmd_corpus(&files, threshold, block_size, json, min_confidence),
         Command::Anomaly {
             target,
             refs,
             threshold,
             block_size,
             json,
-        } => cmd_anomaly(&target, &refs, threshold, block_size, json),
+            min_confidence,
+        } => cmd_anomaly(&target, &refs, threshold, block_size, json, min_confidence),
         Command::Annotate {
             file,
             offset,
@@ -301,7 +349,14 @@ fn main() -> anyhow::Result<()> {
 /// Minimum sub-region size in bytes worth descending into.
 const MIN_DESCENT_SIZE: usize = 32;
 
-fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> anyhow::Result<()> {
+fn cmd_analyze(
+    path: &PathBuf,
+    block_size: usize,
+    json: bool,
+    depth: usize,
+    min_confidence: f64,
+    verbose: bool,
+) -> anyhow::Result<()> {
     let mapped = MappedFile::open(path)?;
     let data = mapped.bytes();
     let file_name = path.display();
@@ -358,10 +413,15 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
     }
 
     const HYP_CAP: usize = 20;
-    if !schema.hypotheses.is_empty() {
+    let filtered_hyps: Vec<_> = schema
+        .hypotheses
+        .iter()
+        .filter(|h| h.confidence >= min_confidence)
+        .collect();
+    if !filtered_hyps.is_empty() {
         println!("\nHYPOTHESES");
         println!("{}", "─".repeat(60));
-        for hyp in schema.hypotheses.iter().take(HYP_CAP) {
+        for hyp in filtered_hyps.iter().take(HYP_CAP) {
             let region_str = if hyp.region.offset == 0 && hyp.region.len == file_size {
                 "[file]    ".to_string()
             } else {
@@ -389,15 +449,19 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
                     .join(", ");
                 println!("              via: {desc}");
             }
-            // Top alternative
-            if let Some((alt_label, alt_conf)) = hyp.alternatives.first() {
+            // Alternatives: all when verbose, first otherwise
+            if verbose {
+                for (alt_label, alt_conf) in &hyp.alternatives {
+                    println!("              alt: {alt_label} ({:.0}%)", alt_conf * 100.0);
+                }
+            } else if let Some((alt_label, alt_conf)) = hyp.alternatives.first() {
                 println!("              alt: {alt_label} ({:.0}%)", alt_conf * 100.0);
             }
         }
-        if schema.hypotheses.len() > HYP_CAP {
+        if filtered_hyps.len() > HYP_CAP {
             println!(
                 "  … {} more (use --json for full list)",
-                schema.hypotheses.len() - HYP_CAP
+                filtered_hyps.len() - HYP_CAP
             );
         }
     }
@@ -437,7 +501,15 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
                             "      ↳ sub-region 0x{start:06x}+{} (inside: {})",
                             hyp.region.len, hyp.label
                         );
-                        print_region_analysis(sub_data, start, block_size, depth - 1, "        ");
+                        print_region_analysis(
+                            sub_data,
+                            start,
+                            block_size,
+                            depth - 1,
+                            "        ",
+                            min_confidence,
+                            verbose,
+                        );
                     }
                 }
                 LayoutSpan::Unknown(region) => {
@@ -454,7 +526,9 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
 
     let magic: Vec<_> = all_signals
         .iter()
-        .filter(|s| matches!(&s.kind, SignalKind::MagicBytes { .. }))
+        .filter(|s| {
+            matches!(&s.kind, SignalKind::MagicBytes { .. }) && s.confidence >= min_confidence
+        })
         .collect();
 
     if !magic.is_empty() {
@@ -477,7 +551,10 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
 
     let strings: Vec<_> = all_signals
         .iter()
-        .filter(|s| matches!(&s.kind, SignalKind::NullTerminatedString { .. }))
+        .filter(|s| {
+            matches!(&s.kind, SignalKind::NullTerminatedString { .. })
+                && s.confidence >= min_confidence
+        })
         .collect();
 
     if !strings.is_empty() {
@@ -493,12 +570,18 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
                 content,
                 sig.confidence * 100.0
             );
+            if verbose && !sig.reason.is_empty() {
+                println!("            → {}", sig.reason);
+            }
         }
     }
 
     let len_prefixed: Vec<_> = all_signals
         .iter()
-        .filter(|s| matches!(&s.kind, SignalKind::LengthPrefixedBlob { .. }))
+        .filter(|s| {
+            matches!(&s.kind, SignalKind::LengthPrefixedBlob { .. })
+                && s.confidence >= min_confidence
+        })
         .collect();
 
     if !len_prefixed.is_empty() {
@@ -536,12 +619,17 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
                 preview,
                 sig.confidence * 100.0
             );
+            if verbose && !sig.reason.is_empty() {
+                println!("            → {}", sig.reason);
+            }
         }
     }
 
     let chunk_seqs: Vec<_> = all_signals
         .iter()
-        .filter(|s| matches!(&s.kind, SignalKind::ChunkSequence { .. }))
+        .filter(|s| {
+            matches!(&s.kind, SignalKind::ChunkSequence { .. }) && s.confidence >= min_confidence
+        })
         .collect();
 
     if !chunk_seqs.is_empty() {
@@ -575,12 +663,17 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
                 more,
                 sig.confidence * 100.0
             );
+            if verbose && !sig.reason.is_empty() {
+                println!("            → {}", sig.reason);
+            }
         }
     }
 
     let numeric_vals: Vec<_> = all_signals
         .iter()
-        .filter(|s| matches!(&s.kind, SignalKind::NumericValue { .. }))
+        .filter(|s| {
+            matches!(&s.kind, SignalKind::NumericValue { .. }) && s.confidence >= min_confidence
+        })
         .collect();
 
     if !numeric_vals.is_empty() {
@@ -629,14 +722,14 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
         println!("{}", "─".repeat(60));
 
         for sig in &size_hits {
-            print_numeric_sig(sig);
+            print_numeric_sig(sig, verbose);
         }
         for sig in &pow2_hits {
-            print_numeric_sig(sig);
+            print_numeric_sig(sig, verbose);
         }
         const OFFSET_DISPLAY_CAP: usize = 12;
         for sig in offset_hits.iter().take(OFFSET_DISPLAY_CAP) {
-            print_numeric_sig(sig);
+            print_numeric_sig(sig, verbose);
         }
         if offset_hits.len() > OFFSET_DISPLAY_CAP {
             println!(
@@ -647,10 +740,9 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
     }
 
     // ── Ngram profile (one per file) ────────────────────────────────────────
-    if let Some(profile) = all_signals
-        .iter()
-        .find(|s| matches!(&s.kind, SignalKind::NgramProfile { .. }))
-    {
+    if let Some(profile) = all_signals.iter().find(|s| {
+        matches!(&s.kind, SignalKind::NgramProfile { .. }) && s.confidence >= min_confidence
+    }) {
         let SignalKind::NgramProfile {
             bigram_entropy,
             top_bigrams,
@@ -663,13 +755,15 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
         println!("{}", "─".repeat(60));
         println!("  bigram entropy  {bigram_entropy:.2} bits   hint: {data_type_hint}");
         println!("  top bigrams     {}", top_bigrams.join("  "));
+        if verbose && !profile.reason.is_empty() {
+            println!("  → {}", profile.reason);
+        }
     }
 
     // ── Alignment hint (one per file) ───────────────────────────────────────
-    if let Some(align_sig) = all_signals
-        .iter()
-        .find(|s| matches!(&s.kind, SignalKind::AlignmentHint { .. }))
-    {
+    if let Some(align_sig) = all_signals.iter().find(|s| {
+        matches!(&s.kind, SignalKind::AlignmentHint { .. }) && s.confidence >= min_confidence
+    }) {
         let SignalKind::AlignmentHint {
             alignment,
             entropy_spread,
@@ -690,7 +784,9 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
     // ── Repeating stride patterns ────────────────────────────────────────────
     let stride_sigs: Vec<_> = all_signals
         .iter()
-        .filter(|s| matches!(&s.kind, SignalKind::RepeatedPattern { .. }))
+        .filter(|s| {
+            matches!(&s.kind, SignalKind::RepeatedPattern { .. }) && s.confidence >= min_confidence
+        })
         .collect();
 
     if !stride_sigs.is_empty() {
@@ -719,6 +815,9 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
                 hex,
                 sig.confidence * 100.0
             );
+            if verbose && !sig.reason.is_empty() {
+                println!("            → {}", sig.reason);
+            }
         }
         if stride_sigs.len() > STRIDE_DISPLAY_CAP {
             println!(
@@ -730,7 +829,9 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
 
     let tlv_seqs: Vec<_> = all_signals
         .iter()
-        .filter(|s| matches!(&s.kind, SignalKind::TlvSequence { .. }))
+        .filter(|s| {
+            matches!(&s.kind, SignalKind::TlvSequence { .. }) && s.confidence >= min_confidence
+        })
         .collect();
 
     if !tlv_seqs.is_empty() {
@@ -775,6 +876,9 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
                 more,
                 sig.confidence * 100.0
             );
+            if verbose && !sig.reason.is_empty() {
+                println!("            → {}", sig.reason);
+            }
         }
         if tlv_seqs.len() > TLV_DISPLAY_CAP {
             println!(
@@ -786,7 +890,7 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
 
     let padding_runs: Vec<_> = all_signals
         .iter()
-        .filter(|s| matches!(&s.kind, SignalKind::Padding { .. }))
+        .filter(|s| matches!(&s.kind, SignalKind::Padding { .. }) && s.confidence >= min_confidence)
         .collect();
 
     if !padding_runs.is_empty() {
@@ -813,6 +917,9 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
                 run_len,
                 sig.confidence * 100.0
             );
+            if verbose && !sig.reason.is_empty() {
+                println!("            → {}", sig.reason);
+            }
         }
         if padding_runs.len() > PADDING_DISPLAY_CAP {
             println!(
@@ -825,7 +932,7 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
     // ── Chi-square uniformity (one per file) ────────────────────────────────
     if let Some(chisq_sig) = all_signals
         .iter()
-        .find(|s| matches!(&s.kind, SignalKind::ChiSquare { .. }))
+        .find(|s| matches!(&s.kind, SignalKind::ChiSquare { .. }) && s.confidence >= min_confidence)
     {
         let SignalKind::ChiSquare { chi_sq, p_value } = &chisq_sig.kind else {
             unreachable!()
@@ -853,7 +960,7 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
     // ── Variable-length integers ─────────────────────────────────────────────
     let varint_sigs: Vec<_> = all_signals
         .iter()
-        .filter(|s| matches!(&s.kind, SignalKind::VarInt { .. }))
+        .filter(|s| matches!(&s.kind, SignalKind::VarInt { .. }) && s.confidence >= min_confidence)
         .collect();
 
     if !varint_sigs.is_empty() {
@@ -889,10 +996,9 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
     }
 
     // ── Packed nibble sub-fields (one per file) ──────────────────────────────
-    if let Some(packed_sig) = all_signals
-        .iter()
-        .find(|s| matches!(&s.kind, SignalKind::PackedField { .. }))
-    {
+    if let Some(packed_sig) = all_signals.iter().find(|s| {
+        matches!(&s.kind, SignalKind::PackedField { .. }) && s.confidence >= min_confidence
+    }) {
         let SignalKind::PackedField {
             high_nibble_entropy,
             low_nibble_entropy,
@@ -912,12 +1018,17 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
             packed_sig.confidence * 100.0
         );
         println!("  → {hint}");
+        if verbose && !packed_sig.reason.is_empty() {
+            println!("  → {}", packed_sig.reason);
+        }
     }
 
     // ── Offset graph (one per width/endian pair) ─────────────────────────────
     let offset_graph_sigs: Vec<_> = all_signals
         .iter()
-        .filter(|s| matches!(&s.kind, SignalKind::OffsetGraph { .. }))
+        .filter(|s| {
+            matches!(&s.kind, SignalKind::OffsetGraph { .. }) && s.confidence >= min_confidence
+        })
         .collect();
 
     if !offset_graph_sigs.is_empty() {
@@ -956,14 +1067,16 @@ fn cmd_analyze(path: &PathBuf, block_size: usize, json: bool, depth: usize) -> a
                     component_edges - EDGE_DISPLAY_CAP
                 );
             }
+            if verbose && !sig.reason.is_empty() {
+                println!("    → {}", sig.reason);
+            }
         }
     }
 
     // ── Compression ratio probe (one per file) ───────────────────────────────
-    if let Some(compress_sig) = all_signals
-        .iter()
-        .find(|s| matches!(&s.kind, SignalKind::CompressionProbe { .. }))
-    {
+    if let Some(compress_sig) = all_signals.iter().find(|s| {
+        matches!(&s.kind, SignalKind::CompressionProbe { .. }) && s.confidence >= min_confidence
+    }) {
         let SignalKind::CompressionProbe {
             original_size,
             compressed_size,
@@ -1077,6 +1190,8 @@ fn print_region_analysis(
     block_size: usize,
     depth: usize,
     indent: &str,
+    min_confidence: f64,
+    verbose: bool,
 ) {
     if data.len() < MIN_DESCENT_SIZE {
         return;
@@ -1085,19 +1200,24 @@ fn print_region_analysis(
     let signals = signals::extract_all(data, block_size, &corpus);
     let schema = hypothesis::build(&signals, data.len());
 
-    if schema.hypotheses.is_empty() {
+    let filtered_hyps: Vec<_> = schema
+        .hypotheses
+        .iter()
+        .filter(|h| h.confidence >= min_confidence)
+        .collect();
+    if filtered_hyps.is_empty() {
         return;
     }
 
     // ── HYPOTHESES ───────────────────────────────────────────────────────────
     const HYP_CAP: usize = 10;
-    let total = schema.hypotheses.len();
+    let total = filtered_hyps.len();
     if total > HYP_CAP {
         println!("{indent}HYPOTHESES  ({HYP_CAP} of {total} shown)");
     } else {
         println!("{indent}HYPOTHESES");
     }
-    for hyp in schema.hypotheses.iter().take(HYP_CAP) {
+    for hyp in filtered_hyps.iter().take(HYP_CAP) {
         let region_str = if hyp.region.offset == 0 && hyp.region.len == data.len() {
             "[sub-region]".to_string()
         } else {
@@ -1111,6 +1231,11 @@ fn print_region_analysis(
         );
         if !hyp.reasoning.is_empty() {
             println!("{indent}    why: {}", hyp.reasoning);
+        }
+        if verbose {
+            for (alt_label, alt_conf) in &hyp.alternatives {
+                println!("{indent}    alt: {alt_label} ({:.0}%)", alt_conf * 100.0);
+            }
         }
     }
 
@@ -1154,6 +1279,8 @@ fn print_region_analysis(
                         block_size,
                         depth - 1,
                         &format!("{next_indent}  "),
+                        min_confidence,
+                        verbose,
                     );
                 }
             }
@@ -1178,6 +1305,8 @@ fn cmd_descend(
     len_str: &str,
     block_size: usize,
     depth: usize,
+    min_confidence: f64,
+    verbose: bool,
 ) -> anyhow::Result<()> {
     let mapped = MappedFile::open(path)?;
     let data = mapped.bytes();
@@ -1203,7 +1332,7 @@ fn cmd_descend(
     println!("{bar}");
 
     let slice = &data[base..base + len];
-    print_region_analysis(slice, base, block_size, depth, "");
+    print_region_analysis(slice, base, block_size, depth, "", min_confidence, verbose);
     println!();
     Ok(())
 }
@@ -1430,6 +1559,8 @@ fn cmd_region(
     len_str: &str,
     block_size: usize,
     json: bool,
+    min_confidence: f64,
+    verbose: bool,
 ) -> anyhow::Result<()> {
     let mapped = MappedFile::open(path)?;
     let data = mapped.bytes();
@@ -1471,13 +1602,18 @@ fn cmd_region(
     println!("  tiltshift region  {file_name}  0x{base:06x}+{len}  ({len} bytes)");
     println!("{bar}");
 
-    if schema.hypotheses.is_empty() {
+    let filtered_hyps: Vec<_> = schema
+        .hypotheses
+        .iter()
+        .filter(|h| h.confidence >= min_confidence)
+        .collect();
+    if filtered_hyps.is_empty() {
         println!("\n  (no hypotheses — region may be too small or featureless)");
     } else {
         println!("\nHYPOTHESES");
         println!("{}", "─".repeat(60));
         const HYP_CAP: usize = 10;
-        for hyp in schema.hypotheses.iter().take(HYP_CAP) {
+        for hyp in filtered_hyps.iter().take(HYP_CAP) {
             // Display file-absolute offsets.
             let region_str = if hyp.region.offset == 0 && hyp.region.len == len {
                 "[region]  ".to_string()
@@ -1503,14 +1639,18 @@ fn cmd_region(
                     .join(", ");
                 println!("              via: {desc}");
             }
-            if let Some((alt_label, alt_conf)) = hyp.alternatives.first() {
+            if verbose {
+                for (alt_label, alt_conf) in &hyp.alternatives {
+                    println!("              alt: {alt_label} ({:.0}%)", alt_conf * 100.0);
+                }
+            } else if let Some((alt_label, alt_conf)) = hyp.alternatives.first() {
                 println!("              alt: {alt_label} ({:.0}%)", alt_conf * 100.0);
             }
         }
-        if schema.hypotheses.len() > HYP_CAP {
+        if filtered_hyps.len() > HYP_CAP {
             println!(
                 "  … {} more (use --json for full list)",
-                schema.hypotheses.len() - HYP_CAP
+                filtered_hyps.len() - HYP_CAP
             );
         }
     }
@@ -2009,6 +2149,7 @@ fn cmd_corpus(
     threshold: f64,
     block_size: usize,
     json: bool,
+    min_confidence: f64,
 ) -> anyhow::Result<()> {
     if paths.len() < 2 {
         anyhow::bail!("corpus requires at least 2 files");
@@ -2111,10 +2252,15 @@ fn cmd_corpus(
 
     // Hypotheses
     const HYP_CAP: usize = 20;
-    if !schema.hypotheses.is_empty() {
+    let filtered_hyps: Vec<_> = schema
+        .hypotheses
+        .iter()
+        .filter(|h| h.confidence >= min_confidence)
+        .collect();
+    if !filtered_hyps.is_empty() {
         println!("\nCONSENSUS HYPOTHESES");
         println!("{}", "─".repeat(60));
-        for hyp in schema.hypotheses.iter().take(HYP_CAP) {
+        for hyp in filtered_hyps.iter().take(HYP_CAP) {
             let region_str = if hyp.region.offset == 0 && hyp.region.len == common_size {
                 "[file]    ".to_string()
             } else {
@@ -2142,10 +2288,10 @@ fn cmd_corpus(
                 println!("              alt: {alt_label} ({:.0}%)", alt_conf * 100.0);
             }
         }
-        if schema.hypotheses.len() > HYP_CAP {
+        if filtered_hyps.len() > HYP_CAP {
             println!(
                 "  … {} more (use --json for full list)",
-                schema.hypotheses.len() - HYP_CAP
+                filtered_hyps.len() - HYP_CAP
             );
         }
     }
@@ -2192,17 +2338,21 @@ fn cmd_corpus(
     println!("\nPER-FILE DIVERGENCES");
     println!("{}", "─".repeat(60));
     for (path_str, divs) in &per_file_divergences {
-        println!("  {path_str}:  {} unique signal(s)", divs.len());
-        for sig in divs.iter().take(DIV_CAP) {
+        let shown_divs: Vec<_> = divs
+            .iter()
+            .filter(|s| s.confidence >= min_confidence)
+            .collect();
+        println!("  {path_str}:  {} unique signal(s)", shown_divs.len());
+        for sig in shown_divs.iter().take(DIV_CAP) {
             println!(
                 "    {}  (not in consensus)",
                 format_signal_summary(sig).trim_start()
             );
         }
-        if divs.len() > DIV_CAP {
+        if shown_divs.len() > DIV_CAP {
             println!(
                 "    … {} more (use --json for full list)",
-                divs.len() - DIV_CAP
+                shown_divs.len() - DIV_CAP
             );
         }
     }
@@ -2216,6 +2366,7 @@ fn cmd_anomaly(
     threshold: f64,
     block_size: usize,
     json: bool,
+    min_confidence: f64,
 ) -> anyhow::Result<()> {
     if refs.len() < 2 {
         anyhow::bail!("anomaly requires at least 2 reference files");
@@ -2321,6 +2472,10 @@ fn cmd_anomaly(
             .cmp(&b.region.offset)
             .then(b.confidence.partial_cmp(&a.confidence).unwrap())
     });
+
+    // Apply confidence filter after sorting (preserves sort order).
+    unexpected.retain(|s| s.confidence >= min_confidence);
+    missing.retain(|s| s.confidence >= min_confidence);
 
     let anomaly_score = unexpected.len() + missing.len();
     let anomaly_class = match anomaly_score {
@@ -2465,7 +2620,7 @@ fn cmd_magic_list(filter: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_numeric_sig(sig: &tiltshift::types::Signal) {
+fn print_numeric_sig(sig: &tiltshift::types::Signal, verbose: bool) {
     let SignalKind::NumericValue {
         little_endian,
         value,
@@ -2496,6 +2651,9 @@ fn print_numeric_sig(sig: &tiltshift::types::Signal) {
         flags.join(", "),
         sig.confidence * 100.0
     );
+    if verbose && !sig.reason.is_empty() {
+        println!("            → {}", sig.reason);
+    }
 }
 
 fn cmd_annotate(
