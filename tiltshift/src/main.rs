@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use rayon::prelude::*;
 use std::path::PathBuf;
 use tiltshift::{
     constraint, corpus, hypothesis,
@@ -1698,14 +1699,17 @@ fn cmd_obfuscate_multi(patterns: &[String], force: bool) -> anyhow::Result<()> {
     }
 
     let corpus = corpus::load();
-    let mut errors = 0usize;
 
-    for path in &paths {
-        if let Err(e) = obfuscate_one(path, &corpus, force) {
-            eprintln!("tiltshift: {}: {e}", path.display());
-            errors += 1;
-        }
-    }
+    let errors: usize = paths
+        .par_iter()
+        .map(|path| match obfuscate_one(path, &corpus, force) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("tiltshift: {}: {e}", path.display());
+                1
+            }
+        })
+        .sum();
 
     if errors > 0 {
         anyhow::bail!("{errors} file(s) failed");
