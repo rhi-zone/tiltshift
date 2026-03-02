@@ -88,7 +88,7 @@
 - [x] `tiltshift analyze <file>` — runs all signals, outputs magic/strings/entropy map
 - [x] `tiltshift region <file> <offset> <len>` — ranked interpretations of a sub-range  ✓ done (`802b694`, docs `b9588a6`)
 - [x] `tiltshift diff <file_a> <file_b>` — structural delta (DESIGN: Primitive API `diff`)  ✓ done
-- [ ] `tiltshift corpus add <format> <files...>` — add to known format library
+- [x] `tiltshift corpus add <format> <files...>` — add to known format library  ✓ done (`corpus build` / `corpus add` / `corpus list`)
 - [x] JSON output mode for agent consumption (`--json` flag on `analyze`)
 - [x] Confidence thresholds / verbosity flags  ✓ done (`9ed3ecb`, `--min-confidence`, `--verbose`)
 

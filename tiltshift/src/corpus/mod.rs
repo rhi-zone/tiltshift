@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::types::Signal;
+
 /// A single format entry: a name, a magic byte pattern, and an optional MIME type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormatEntry {
@@ -100,6 +102,65 @@ fn user_corpus_paths() -> Vec<PathBuf> {
     paths.push(PathBuf::from(".tiltshift/magic.toml"));
 
     paths
+}
+
+/// A named format model: consensus signals saved via `corpus add`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormatModel {
+    pub name: String,
+    pub signals: Vec<Signal>,
+}
+
+/// Directory that holds saved format models.
+///
+/// `~/.config/tiltshift/formats/`
+pub fn formats_dir() -> Option<PathBuf> {
+    config_dir().map(|c| c.join("tiltshift").join("formats"))
+}
+
+/// Path to the TOML file for a saved format model.
+///
+/// `~/.config/tiltshift/formats/<name>.toml`
+pub fn format_path(name: &str) -> Option<PathBuf> {
+    formats_dir().map(|d| d.join(format!("{name}.toml")))
+}
+
+/// Save consensus signals as a named format model.
+///
+/// Creates the formats directory if it doesn't exist; overwrites any previous
+/// model with the same name.
+pub fn save_format(name: &str, signals: &[Signal]) -> anyhow::Result<PathBuf> {
+    let path = format_path(name).ok_or_else(|| {
+        anyhow::anyhow!("cannot determine config dir (no HOME or XDG_CONFIG_HOME)")
+    })?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let model = FormatModel {
+        name: name.to_string(),
+        signals: signals.to_vec(),
+    };
+    let text = toml::to_string_pretty(&model)?;
+    std::fs::write(&path, text)?;
+    Ok(path)
+}
+
+/// Load a previously saved format model by name.
+///
+/// Returns `None` if the model file does not exist.
+pub fn load_format(name: &str) -> anyhow::Result<Option<FormatModel>> {
+    let path = match format_path(name) {
+        Some(p) => p,
+        None => anyhow::bail!("cannot determine config dir (no HOME or XDG_CONFIG_HOME)"),
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let model: FormatModel = toml::from_str(&text)?;
+            Ok(Some(model))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn config_dir() -> Option<PathBuf> {

@@ -163,28 +163,15 @@ enum Command {
         json: bool,
     },
 
-    /// Extract a structural model from N binary files of the same format.
+    /// Build a corpus model from multiple files, or save one as a named format.
     ///
-    /// Finds signals present across all (or most) files at the same offset.
-    /// Useful for reverse-engineering unknown binary formats from multiple samples.
     /// Examples:
-    ///   tiltshift corpus sample1.bin sample2.bin sample3.bin
-    ///   tiltshift corpus --threshold 0.8 *.bin
+    ///   tiltshift corpus build sample1.bin sample2.bin sample3.bin
+    ///   tiltshift corpus build --threshold 0.8 *.bin
+    ///   tiltshift corpus add png ref1.png ref2.png ref3.png
     Corpus {
-        /// Two or more files to analyse.
-        files: Vec<PathBuf>,
-        /// Min fraction of files a signal must appear in (0.0–1.0, default: 1.0).
-        #[arg(long, default_value_t = 1.0)]
-        threshold: f64,
-        /// Entropy block size in bytes (default: 256).
-        #[arg(long, default_value_t = 256)]
-        block_size: usize,
-        /// Output JSON instead of human-readable text.
-        #[arg(long)]
-        json: bool,
-        /// Only display signals and hypotheses at or above this confidence (0.0–1.0).
-        #[arg(long, default_value_t = 0.0)]
-        min_confidence: f64,
+        #[command(subcommand)]
+        action: CorpusAction,
     },
 
     /// Check a file against a structural model built from reference samples.
@@ -258,6 +245,58 @@ enum MagicAction {
     },
 }
 
+#[derive(Subcommand)]
+enum CorpusAction {
+    /// Extract a structural model from N binary files of the same format.
+    ///
+    /// Finds signals present across all (or most) files at the same offset.
+    /// Useful for reverse-engineering unknown binary formats from multiple samples.
+    /// Examples:
+    ///   tiltshift corpus build sample1.bin sample2.bin sample3.bin
+    ///   tiltshift corpus build --threshold 0.8 *.bin
+    Build {
+        /// Two or more files to analyse.
+        files: Vec<PathBuf>,
+        /// Min fraction of files a signal must appear in (0.0–1.0, default: 1.0).
+        #[arg(long, default_value_t = 1.0)]
+        threshold: f64,
+        /// Entropy block size in bytes (default: 256).
+        #[arg(long, default_value_t = 256)]
+        block_size: usize,
+        /// Output JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+        /// Only display signals and hypotheses at or above this confidence (0.0–1.0).
+        #[arg(long, default_value_t = 0.0)]
+        min_confidence: f64,
+    },
+    /// Build a corpus model from reference files and save it as a named format.
+    ///
+    /// The model is stored at ~/.config/tiltshift/formats/<format>.toml and can
+    /// be inspected with `corpus list`. Examples:
+    ///   tiltshift corpus add png ref1.png ref2.png ref3.png
+    ///   tiltshift corpus add wav --threshold 0.8 sample1.wav sample2.wav
+    Add {
+        /// Short name for this format (e.g. "png", "wav", "elf").
+        format: String,
+        /// Two or more representative files.
+        files: Vec<PathBuf>,
+        /// Min fraction of files a signal must appear in (0.0–1.0, default: 1.0).
+        #[arg(long, default_value_t = 1.0)]
+        threshold: f64,
+        /// Entropy block size in bytes (default: 256).
+        #[arg(long, default_value_t = 256)]
+        block_size: usize,
+        /// Only include signals at or above this confidence (0.0–1.0, default: 0.0).
+        #[arg(long, default_value_t = 0.0)]
+        min_confidence: f64,
+    },
+    /// List saved format models.
+    ///
+    /// Shows all named formats stored at ~/.config/tiltshift/formats/.
+    List,
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -322,13 +361,23 @@ fn main() -> anyhow::Result<()> {
             block_size,
             json,
         } => cmd_diff(&file_a, &file_b, min_structural, block_size, json),
-        Command::Corpus {
-            files,
-            threshold,
-            block_size,
-            json,
-            min_confidence,
-        } => cmd_corpus(&files, threshold, block_size, json, min_confidence),
+        Command::Corpus { action } => match action {
+            CorpusAction::Build {
+                files,
+                threshold,
+                block_size,
+                json,
+                min_confidence,
+            } => cmd_corpus(&files, threshold, block_size, json, min_confidence),
+            CorpusAction::Add {
+                format,
+                files,
+                threshold,
+                block_size,
+                min_confidence,
+            } => cmd_corpus_add(&format, &files, threshold, block_size, min_confidence),
+            CorpusAction::List => cmd_corpus_list(),
+        },
         Command::Anomaly {
             target,
             refs,
@@ -2142,6 +2191,99 @@ fn build_consensus(
     });
 
     (consensus_keys, consensus_signals)
+}
+
+fn cmd_corpus_add(
+    format_name: &str,
+    paths: &[PathBuf],
+    threshold: f64,
+    block_size: usize,
+    min_confidence: f64,
+) -> anyhow::Result<()> {
+    if paths.len() < 2 {
+        anyhow::bail!("corpus add requires at least 2 files");
+    }
+
+    let mc = corpus::load();
+
+    let mut entries: Vec<FileEntry> = Vec::new();
+    for path in paths {
+        if let Some(entry) = load_file_entry(path, block_size, &mc)? {
+            entries.push(entry);
+        }
+    }
+
+    if entries.len() < 2 {
+        anyhow::bail!("corpus add requires at least 2 non-empty files");
+    }
+
+    let n = entries.len();
+    let min_count = ((threshold * n as f64).ceil() as usize).max(1);
+    let (_consensus_keys, consensus_signals) = build_consensus(&entries, threshold);
+
+    let filtered: Vec<_> = consensus_signals
+        .into_iter()
+        .filter(|s| s.confidence >= min_confidence)
+        .collect();
+
+    let path = corpus::save_format(format_name, &filtered)?;
+
+    let threshold_pct = (threshold * 100.0) as u32;
+    println!(
+        "Saved {} consensus signal(s) for format {:?}",
+        filtered.len(),
+        format_name
+    );
+    println!(
+        "  Files: {}  Threshold: {threshold_pct}% ({min_count}/{n})",
+        n
+    );
+    println!("  Model: {}", path.display());
+
+    Ok(())
+}
+
+fn cmd_corpus_list() -> anyhow::Result<()> {
+    let dir = match corpus::formats_dir() {
+        Some(d) => d,
+        None => anyhow::bail!("cannot determine config dir (no HOME or XDG_CONFIG_HOME)"),
+    };
+
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("No saved format models ({})", dir.display());
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    let mut models: Vec<(String, usize)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+            continue;
+        }
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(model) = toml::from_str::<corpus::FormatModel>(&text) {
+                models.push((model.name, model.signals.len()));
+            }
+        }
+    }
+
+    if models.is_empty() {
+        println!("No saved format models ({})", dir.display());
+        return Ok(());
+    }
+
+    models.sort_by(|a, b| a.0.cmp(&b.0));
+    println!("Saved format models  ({})", dir.display());
+    println!("{}", "─".repeat(60));
+    for (name, n_signals) in &models {
+        println!("  {name:<20}  {n_signals} signal(s)");
+    }
+
+    Ok(())
 }
 
 fn cmd_corpus(
