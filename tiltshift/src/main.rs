@@ -641,6 +641,7 @@ fn cmd_analyze(
                 prefix_width,
                 little_endian,
                 blob_count,
+                inter_blob_gap,
                 printable_ratio,
             } = &sig.kind
             else {
@@ -654,11 +655,17 @@ fn cmd_analyze(
                 "be".to_string()
             };
             let type_label = format!("u{}{}", prefix_width * 8, endian_label);
+            let gap_tag = if *inter_blob_gap == 0 {
+                String::new()
+            } else {
+                format!("  gap={inter_blob_gap}B")
+            };
             println!(
-                "  {:8}  {} ×{}  avg {:.0}% printable  (confidence {:.0}%)",
+                "  {:8}  {} ×{}{} avg {:.0}% printable  (confidence {:.0}%)",
                 sig.region.to_string(),
                 type_label,
                 blob_count,
+                gap_tag,
                 printable_ratio * 100.0,
                 sig.confidence * 100.0
             );
@@ -1814,11 +1821,17 @@ fn format_signal_summary(sig: &Signal) -> String {
         SignalKind::LengthPrefixedBlob {
             prefix_width,
             blob_count,
+            inter_blob_gap,
             little_endian,
             ..
         } => {
             let endian = if *little_endian { "le" } else { "be" };
-            format!("u{}{endian}  ×{blob_count} blobs", prefix_width * 8)
+            let gap = if *inter_blob_gap > 0 {
+                format!("  gap={inter_blob_gap}B")
+            } else {
+                String::new()
+            };
+            format!("u{}{endian}  ×{blob_count} blobs{gap}", prefix_width * 8)
         }
         SignalKind::RepeatedPattern {
             stride,

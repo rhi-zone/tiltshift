@@ -166,6 +166,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
             prefix_width,
             little_endian,
             blob_count,
+            inter_blob_gap,
             printable_ratio,
         } => {
             let endian_label = if *prefix_width == 1 {
@@ -177,6 +178,11 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
             };
             let type_label = format!("u{}{}", prefix_width * 8, endian_label);
             let content_hint = if *printable_ratio > 0.8 { "text" } else { "binary" };
+            let gap_desc = if *inter_blob_gap == 0 {
+                "chaining end-to-end".to_string()
+            } else {
+                format!("with {inter_blob_gap}-byte inter-blob fields")
+            };
             Some(Hypothesis {
                 region: sig.region.clone(),
                 label: format!(
@@ -184,9 +190,8 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
                 ),
                 confidence: sig.confidence,
                 reasoning: format!(
-                    "{blob_count} consecutive {type_label}-prefixed blobs chain end-to-end \
-                     with avg {:.0}% printable body — multiple consecutive valid matches \
-                     rule out coincidence.",
+                    "{blob_count} {type_label}-prefixed blobs {gap_desc}, \
+                     avg {:.0}% printable body — consistent layout rules out coincidence.",
                     printable_ratio * 100.0
                 ),
                 signals: vec![sig.clone()],

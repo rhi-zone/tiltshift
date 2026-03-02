@@ -134,6 +134,11 @@ pub enum SignalKind {
         little_endian: bool,
         /// Number of consecutive blobs in the chain (always ≥ 2).
         blob_count: usize,
+        /// Bytes between the end of one blob's body and the start of the next
+        /// blob's prefix.  0 = exact end-to-end chaining; N = N fixed bytes of
+        /// inter-record fields (type tag, flags, padding, …) between blobs.
+        #[serde(default)]
+        inter_blob_gap: usize,
         /// Average fraction of body bytes that are printable ASCII (0.0–1.0).
         printable_ratio: f64,
     },
