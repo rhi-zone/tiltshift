@@ -76,10 +76,12 @@ enum Command {
         json: bool,
     },
 
-    /// Copy files to <file>.unk with all known magic bytes zeroed out.
+    /// Copy files to <stem>.unk with all known magic bytes zeroed out.
     ///
+    /// The original file extension is stripped so "photo.png" becomes
+    /// "photo.unk", not "photo.png.unk" (which would leak the format).
     /// Accepts multiple files and glob patterns (e.g. "*.png" "dir/**/*.bin").
-    /// Each input produces a separate <input>.unk file alongside the original.
+    /// Each input produces a separate <stem>.unk file alongside the original.
     /// Produces opaque blobs useful for testing signal extractors against
     /// files whose format has been deliberately obscured.
     Obfuscate {
@@ -1715,11 +1717,9 @@ fn obfuscate_one(path: &PathBuf, corpus: &corpus::Corpus, force: bool) -> anyhow
     let mapped = MappedFile::open(path)?;
     let data = mapped.bytes();
 
-    let out_path = {
-        let mut s = path.as_os_str().to_owned();
-        s.push(".unk");
-        PathBuf::from(s)
-    };
+    // Strip the original extension so "photo.png" → "photo.unk", not
+    // "photo.png.unk" (which leaks the format through the filename).
+    let out_path = path.with_extension("unk");
 
     if out_path.exists() && !force {
         anyhow::bail!(
@@ -1731,6 +1731,12 @@ fn obfuscate_one(path: &PathBuf, corpus: &corpus::Corpus, force: bool) -> anyhow
     let mut buf = data.to_vec();
     let mut zeroed: Vec<(usize, String, usize)> = Vec::new();
 
+    // Minimum magic length to zero at non-zero offsets.  Short sequences
+    // (BMP "BM", MP3 sync "\xff\xfb", …) appear by chance inside compressed
+    // or binary data; only trust them at offset 0 where they're unambiguous
+    // file headers.
+    const MIN_INTERIOR_MAGIC_LEN: usize = 4;
+
     for entry in &corpus.formats {
         let Ok(magic) = entry.magic_bytes() else {
             continue;
@@ -1739,6 +1745,9 @@ fn obfuscate_one(path: &PathBuf, corpus: &corpus::Corpus, force: bool) -> anyhow
             continue;
         }
         for offset in search::find_all(data, &magic) {
+            if offset > 0 && magic.len() < MIN_INTERIOR_MAGIC_LEN {
+                continue; // too short to be reliable away from offset 0
+            }
             for b in buf[offset..offset + magic.len()].iter_mut() {
                 *b = 0x00;
             }
