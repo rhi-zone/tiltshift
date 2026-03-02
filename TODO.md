@@ -38,6 +38,20 @@
 - [x] Pointer / offset graph builder — render as graph; pointer chasing should be automatic (DESIGN: Pointer / offset graph)  ✓ done
 - [x] Variable-length integer encoding detector (LEB128, UTF-8 continuation) (DESIGN: Bit-level signals)  ✓ done
 - [x] Packed field detector (nibble-level independent variation) (DESIGN: Bit-level signals)  ✓ done (`d4d1108`)
+- [ ] **Bytecode stream detector** — sequential-parse signals for opcode-driven formats; fundamentally different from position-independent signals; see design notes below
+
+## Bytecode / sequential-parse signals
+
+<!-- Bytecode breaks all existing signal assumptions: you cannot analyze a byte window in isolation
+     because operand count and width are a function of the opcode byte.  Requires sequential walk
+     from a known entry point. -->
+
+- [ ] **Opcode table format** — `data/opcodes/<format>.toml`: opcode → operand description (fixed bytes, leb128, modrm, etc.); analogous to `data/magic.toml`; start with simple VMs (Python .pyc, JVM, WASM) before x86
+- [ ] **Coverage probe** (`signals/bytecode.rs`) — try to decode from each candidate entry point using an opcode table; measure what fraction of bytes decode as valid instructions before hitting unknown opcode; emit `BytecodeStream { format, decode_coverage, instruction_count, invalid_opcode_rate }` — analogous to `compress::scan_compress_probe` but stateful
+- [ ] **Jump target consistency** — after decode, verify every branch/jump target lands on a decoded instruction boundary; strongest available validity check; boosts confidence when satisfied
+- [ ] **Entry point discovery** — MagicBytes signal (ELF `.text`, `.pyc` magic, WASM `\0asm`) hands off candidate start offsets; bytecode scanner takes offset + opcode table and walks forward
+- [ ] **`tiltshift decode <file> <offset> <format>`** — decode and print instructions from a given offset using a named opcode table
+- [ ] **`tiltshift opcodes add <format> <file>`** — register a new opcode table
 
 ## Hypothesis engine
 
@@ -102,6 +116,7 @@
 ## Stretch
 
 - [x] `tiltshift obfuscate <file>` — copy file to `<filename>.unk` then zero out known magic bytes to produce an opaque blob for analysis testing  ✓ done
+- [ ] **`length_prefix` stride extension** — current scanner requires exact end-to-end chaining (gap=0); extend to fixed-stride sequences (gap=K bytes of interleaved struct fields): collect all valid blob candidates into a HashMap, histogram inter-blob gaps, find chains of ≥3 blobs with consistent gap>0; add `stride: usize` field to `LengthPrefixedBlob` (0 = exact, N = N-byte gap)
 - [ ] V8 compressed pointer cluster — u32 values with low bit=1 (tagged pointers), narrow upper-32 range (shared cage base); emit `CompressedPointerCluster` signal (future extension of offset graph)
 - [ ] REPL / interactive session for iterative exploration
 - [ ] normalize integration (structural view of tiltshift's own output) — same pattern, different domain (DESIGN: Relation to rhi ecosystem)
