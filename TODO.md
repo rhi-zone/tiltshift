@@ -82,6 +82,30 @@
 - [x] Corpus model builder (feed N known-format files, extract structural model) — known formats are the training data and validation set (DESIGN: Known vs unknown formats)  ✓ done (`tiltshift corpus`)
 - [x] Anomaly detection mode (file vs corpus model → what doesn't fit) — steganography detection is a natural byproduct (DESIGN: Scope)  ✓ done (`tiltshift anomaly`)
 
+## Signal tuning backlog (from corpus validation, 608 files)
+
+Real-world validation on 608 obfuscated corpus files revealed the following remaining issues after `fix(signals)` commit (369da66):
+
+### Fixed in 369da66
+- 2-byte magic false positives at non-zero offsets (ff f3, 78 9c, 4d 5a etc.)
+- LEB128 false positives in compressed data (> 40% high bytes → skip)
+- TLV false positives in compressed data (same gate)
+- RepeatedPattern deduplication by stride (adjacent phase offsets → keep best)
+
+### Remaining issues (descending priority)
+- **Short null-terminated strings in large uncompressed images**: 4-7 byte accidental runs are common in uncompressed pixel data (PNG with no-compression IDAT). Expected ~21000 false positives in a 21MB uncompressed image. Possible fixes: raise MIN_STRING_BYTES from 4 to 8, or add local-context entropy check (skip if surrounding byte entropy too high).
+- **3-byte magic patterns at non-zero offsets in large files**: "FWS" (SWF), "MP+" (Musepack), "ID3", "JPEG XR" each get multiple hits in 21MB uncompressed image. Each 3-byte pattern has ~1.3 expected false hits per 21MB; seeing more (~5-10) suggests the null-byte distribution in images boosts some patterns. Consider lowering confidence for 3-byte hits at non-zero offsets (0.95 → 0.75) so they sort below stronger signals.
+- **Offset graph with very few edges (2 nodes, 1 edge) at 50% confidence**: too weak to be useful. Minimum edge count should probably be 3+, or confidence for 1-edge graphs should be ≤ 0.40.
+- **NumericValue power-of-two signals in sub-region LAYOUT**: generates many low-confidence signals in recursive descent. Already at 40% confidence, but still appears in top-20 for small files with many power-of-two pixel values.
+
+### Positive findings (working well)
+- PNG detection via "IHDR" null-terminated string at offset 0x0c (stripped magic → still identified)
+- WebP detection via "VP8X" / "ALPH" chunk tags (ChunkSequence works without RIFF magic)
+- MP3 detection via "mLAME" encoder tag string
+- BytecodeStream detecting shader bytecode (assets.unk: W=8, 353 instrs, 100% coverage, 64-77% jump validity)
+- Protobuf-like detection (pat.unk: TLV+LEB128 compound, 111 records, 90% confidence)
+- PNG IDAT chunk stride detection (stride=16396 = 16384+12, ×86 occurrences for shewasahewasa.unk)
+
 ## Known format library
 
 <!-- Running tiltshift on known formats validates signals; results become reference models for detecting fragments in unknown data. (DESIGN.md § Known vs unknown formats) -->
