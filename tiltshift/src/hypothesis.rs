@@ -165,7 +165,7 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
         SignalKind::LengthPrefixedBlob {
             prefix_width,
             little_endian,
-            declared_len,
+            blob_count,
             printable_ratio,
         } => {
             let endian_label = if *prefix_width == 1 {
@@ -180,16 +180,17 @@ fn direct_hypothesis(sig: &Signal) -> Option<Hypothesis> {
             Some(Hypothesis {
                 region: sig.region.clone(),
                 label: format!(
-                    "Length-prefixed {content_hint} blob ({type_label} prefix, {declared_len} bytes)"
+                    "Length-prefixed {content_hint} sequence ({type_label} prefix, {blob_count} blobs)"
                 ),
                 confidence: sig.confidence,
                 reasoning: format!(
-                    "Declared length {declared_len} lands within file bounds; \
-                     body is {:.0}% printable ASCII.",
+                    "{blob_count} consecutive {type_label}-prefixed blobs chain end-to-end \
+                     with avg {:.0}% printable body — multiple consecutive valid matches \
+                     rule out coincidence.",
                     printable_ratio * 100.0
                 ),
                 signals: vec![sig.clone()],
-                alternatives: vec![("coincidental value".to_string(), 0.25)],
+                alternatives: vec![("coincidental sequence".to_string(), 0.10)],
                 annotated: false,
             })
         }

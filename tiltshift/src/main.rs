@@ -4,7 +4,7 @@ use tiltshift::{
     constraint, corpus, hypothesis,
     loader::MappedFile,
     probe, search, session, signals,
-    signals::{chunk::sequence_label, length_prefix::body_preview, tlv::tlv_label},
+    signals::{chunk::sequence_label, tlv::tlv_label},
     types::{EntropyClass, Hypothesis, LayoutSpan, Region, Signal, SignalKind},
 };
 
@@ -634,14 +634,14 @@ fn cmd_analyze(
         .collect();
 
     if !len_prefixed.is_empty() {
-        println!("\nLENGTH-PREFIXED BLOBS");
+        println!("\nLENGTH-PREFIXED BLOB SEQUENCES");
         println!("{}", "─".repeat(60));
         for sig in &len_prefixed {
             let SignalKind::LengthPrefixedBlob {
                 prefix_width,
                 little_endian,
-                declared_len,
-                ..
+                blob_count,
+                printable_ratio,
             } = &sig.kind
             else {
                 unreachable!()
@@ -654,18 +654,12 @@ fn cmd_analyze(
                 "be".to_string()
             };
             let type_label = format!("u{}{}", prefix_width * 8, endian_label);
-            let preview = body_preview(
-                data,
-                sig.region.offset,
-                *prefix_width as usize,
-                *declared_len,
-            );
             println!(
-                "  {:8}  {} len={}  {}  (confidence {:.0}%)",
+                "  {:8}  {} ×{}  avg {:.0}% printable  (confidence {:.0}%)",
                 sig.region.to_string(),
                 type_label,
-                declared_len,
-                preview,
+                blob_count,
+                printable_ratio * 100.0,
                 sig.confidence * 100.0
             );
             if verbose && !sig.reason.is_empty() {
@@ -1819,12 +1813,12 @@ fn format_signal_summary(sig: &Signal) -> String {
         } => format!("{format_hint}  {chunk_count} chunks"),
         SignalKind::LengthPrefixedBlob {
             prefix_width,
-            declared_len,
+            blob_count,
             little_endian,
             ..
         } => {
             let endian = if *little_endian { "le" } else { "be" };
-            format!("u{}{endian}  declared_len={declared_len}", prefix_width * 8)
+            format!("u{}{endian}  ×{blob_count} blobs", prefix_width * 8)
         }
         SignalKind::RepeatedPattern {
             stride,

@@ -121,16 +121,20 @@ pub enum SignalKind {
         /// FourCC tags of the first up to 8 chunks.
         tags: Vec<String>,
     },
-    /// A length prefix (u8 / u16 / u32, LE or BE) whose declared byte count
-    /// lands within the file and is followed by plausible body data.
+    /// A consecutive run of length-prefixed blobs (u8 / u16 / u32, LE or BE)
+    /// where each blob's end is immediately followed by the next blob's prefix.
+    ///
+    /// A single occurrence is coincidence-level evidence; requiring ≥ 2
+    /// consecutive blobs that chain exactly means the format is being observed,
+    /// not guessed.
     LengthPrefixedBlob {
         /// Width of the prefix field in bytes: 1, 2, or 4.
         prefix_width: u8,
         /// Byte order of the prefix (ignored / always true for width=1).
         little_endian: bool,
-        /// Value stored in the prefix — the declared body length.
-        declared_len: usize,
-        /// Fraction of body bytes that are printable ASCII (0.0–1.0).
+        /// Number of consecutive blobs in the chain (always ≥ 2).
+        blob_count: usize,
+        /// Average fraction of body bytes that are printable ASCII (0.0–1.0).
         printable_ratio: f64,
     },
     /// Bigram frequency profile for the whole file, used to classify data type.
