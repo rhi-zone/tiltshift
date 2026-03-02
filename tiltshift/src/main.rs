@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use tiltshift::{
     constraint, corpus, hypothesis,
     loader::MappedFile,
-    probe, search, session, signals,
+    opcodes, probe, search, session, signals,
     signals::{chunk::sequence_label, tlv::tlv_label},
     types::{EntropyClass, Hypothesis, LayoutSpan, Region, Signal, SignalKind},
 };
@@ -201,6 +201,36 @@ enum Command {
         min_confidence: f64,
     },
 
+    /// Decode instructions from a byte offset using a named opcode grammar.
+    ///
+    /// OFFSET may be decimal or hex (0x…).  FORMAT is the name of an installed
+    /// grammar (see `tiltshift opcodes list`).  Displays decoded mnemonics and
+    /// operand bytes; unknown opcodes are shown as UNKNOWN and consume 1 byte.
+    ///
+    /// Examples:
+    ///   tiltshift decode bytecode.bin 0x10 my-vm
+    ///   tiltshift decode bytecode.bin 256 my-vm --count 64
+    Decode {
+        file: PathBuf,
+        /// Byte offset to start decoding (decimal or 0x hex).
+        offset: String,
+        /// Grammar name (from `tiltshift opcodes list`).
+        format: String,
+        /// Maximum number of instructions to decode (default: 64).
+        #[arg(long, default_value_t = 64)]
+        count: usize,
+    },
+
+    /// Manage opcode grammar files.
+    ///
+    /// Grammar files map opcode bytes to mnemonics and operand widths.
+    /// They are written by hand after identifying a bytecode format and
+    /// enable the `tiltshift decode` command to display named instructions.
+    Opcodes {
+        #[command(subcommand)]
+        action: OpcodesAction,
+    },
+
     /// Tag a byte range with a human-readable label, persisted in <file>.tiltshift.toml.
     ///
     /// Annotations survive re-analysis and are shown as ANNOTATED spans in the LAYOUT
@@ -294,6 +324,29 @@ enum CorpusAction {
     /// List saved format models.
     ///
     /// Shows all named formats stored at ~/.config/tiltshift/formats/.
+    List,
+}
+
+#[derive(Subcommand)]
+enum OpcodesAction {
+    /// Install an opcode grammar file from a TOML path.
+    ///
+    /// The file must contain `name`, optional `description`, and `[[opcodes]]`
+    /// entries with `byte`, `mnemonic`, and `operand_bytes` fields.
+    /// It is validated and copied to ~/.config/tiltshift/opcodes/<name>.toml.
+    ///
+    /// Example:
+    ///   tiltshift opcodes add my-vm /path/to/my-vm.toml
+    Add {
+        /// Short name to install the grammar under (e.g. "my-vm").
+        name: String,
+        /// Path to the TOML grammar file.
+        file: PathBuf,
+    },
+
+    /// List installed opcode grammars.
+    ///
+    /// Shows all grammars stored at ~/.config/tiltshift/opcodes/.
     List,
 }
 
@@ -392,6 +445,16 @@ fn main() -> anyhow::Result<()> {
             len,
             label,
         } => cmd_annotate(&file, &offset, &len, &label),
+        Command::Decode {
+            file,
+            offset,
+            format,
+            count,
+        } => cmd_decode(&file, &offset, &format, count),
+        Command::Opcodes { action } => match action {
+            OpcodesAction::Add { name, file } => cmd_opcodes_add(&name, &file),
+            OpcodesAction::List => cmd_opcodes_list(),
+        },
     }
 }
 
@@ -2908,7 +2971,157 @@ fn cmd_annotate(
     Ok(())
 }
 
-/// 8-cell block bar representing entropy 0.0–8.0.
+// ── decode ────────────────────────────────────────────────────────────────────
+
+fn cmd_decode(
+    path: &PathBuf,
+    offset_str: &str,
+    format_name: &str,
+    count: usize,
+) -> anyhow::Result<()> {
+    let offset = parse_offset(offset_str)
+        .ok_or_else(|| anyhow::anyhow!("invalid offset: {offset_str:?}"))?;
+
+    let grammar = opcodes::load_grammar(format_name)?;
+    let table = grammar.table();
+
+    let mapped = MappedFile::open(path)?;
+    let data = mapped.bytes();
+
+    if offset >= data.len() {
+        anyhow::bail!(
+            "offset 0x{offset:x} is past end of file ({} bytes)",
+            data.len()
+        );
+    }
+
+    let bar = "═".repeat(60);
+    println!("{bar}");
+    println!(
+        "  decode  {}  offset 0x{offset:x}  grammar: {}",
+        path.display(),
+        grammar.name
+    );
+    if !grammar.description.is_empty() {
+        println!("  {}", grammar.description);
+    }
+    println!("{bar}");
+    println!();
+
+    let mut pos = offset;
+    let mut decoded = 0usize;
+
+    while pos < data.len() && decoded < count {
+        let opcode_byte = data[pos];
+
+        match table[opcode_byte as usize] {
+            Some(entry) => {
+                let end = (pos + 1 + entry.operand_bytes as usize).min(data.len());
+                let operand_data = &data[pos + 1..end];
+
+                // Format operand bytes as hex.
+                let hex_bytes: String = std::iter::once(opcode_byte)
+                    .chain(operand_data.iter().copied())
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
+                // Interpret operand as little-endian integer for display.
+                let operand_str = match operand_data.len() {
+                    0 => String::new(),
+                    1 => format!("0x{:02x}", operand_data[0]),
+                    2 => format!(
+                        "0x{:04x}",
+                        u16::from_le_bytes([operand_data[0], operand_data[1]])
+                    ),
+                    3 => format!(
+                        "0x{:06x}",
+                        u32::from_le_bytes([operand_data[0], operand_data[1], operand_data[2], 0])
+                    ),
+                    _ => format!(
+                        "0x{:08x}",
+                        u32::from_le_bytes([
+                            operand_data[0],
+                            operand_data[1],
+                            operand_data[2],
+                            operand_data[3]
+                        ])
+                    ),
+                };
+
+                println!(
+                    "  0x{pos:06x}  {hex_bytes:<20}  {:<12}  {operand_str}",
+                    entry.mnemonic
+                );
+
+                pos += 1 + entry.operand_bytes as usize;
+            }
+            None => {
+                println!(
+                    "  0x{pos:06x}  {:02x}                     UNKNOWN",
+                    opcode_byte
+                );
+                pos += 1; // advance one byte and continue
+            }
+        }
+        decoded += 1;
+    }
+
+    println!();
+    println!("  {decoded} instruction(s) decoded");
+    if pos < data.len() && decoded == count {
+        println!("  (use --count to see more)");
+    }
+    Ok(())
+}
+
+// ── opcodes ───────────────────────────────────────────────────────────────────
+
+fn cmd_opcodes_add(name: &str, src: &std::path::Path) -> anyhow::Result<()> {
+    let dest = opcodes::install_grammar(name, src)?;
+    println!("installed grammar {name:?} → {}", dest.display());
+    // Load it back to show a summary.
+    let grammar = opcodes::load_grammar(name)?;
+    println!("  {} opcode(s) defined", grammar.entries.len());
+    if !grammar.description.is_empty() {
+        println!("  {}", grammar.description);
+    }
+    Ok(())
+}
+
+fn cmd_opcodes_list() -> anyhow::Result<()> {
+    let grammars = opcodes::list_grammars()?;
+    if grammars.is_empty() {
+        println!("No opcode grammars installed.");
+        println!();
+        println!("Install one with:");
+        println!("  tiltshift opcodes add <name> <grammar.toml>");
+        return Ok(());
+    }
+    let bar = "═".repeat(60);
+    println!("{bar}");
+    println!("  Installed opcode grammars");
+    println!("{bar}");
+    for g in &grammars {
+        let desc = if g.description.is_empty() {
+            String::new()
+        } else {
+            format!("  — {}", g.description)
+        };
+        println!("  {:<20}  {} opcode(s){desc}", g.name, g.entries.len());
+    }
+    println!();
+    println!(
+        "  stored at: {}",
+        opcodes::grammar_dir()
+            .map(|d| d.display().to_string())
+            .unwrap_or_else(|| "(unknown)".to_string())
+    );
+    Ok(())
+}
+
+// ── entropy bar ──────────────────────────────────────────────────────────────
+
 fn entropy_bar(entropy: f64) -> String {
     const BLOCKS: &[char] = &[' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
     let cells = 8usize;

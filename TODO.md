@@ -52,8 +52,8 @@
 - [x] **Phase 3 — jump target validation** — branch operands landing on instruction boundaries  ✓ done
 - [x] **`BytecodeStream` signal kind** — entry_point, decode_coverage, jump_validity, instruction_count, fixed_width, opcode_widths  ✓ done
 - [x] **Frequency analysis** — top-5 opcode dominance hard gate (≥ 0.20); entropy_sep_norm in confidence  ✓ done
-- [ ] **`tiltshift decode <file> <offset> <format>`** — display command only; reads `data/opcodes/<format>.toml`; never feeds back into discovery
-- [ ] **`tiltshift opcodes add/list`** — register and list grammar files; grammar files are human-written outputs of verified discovery
+- [x] **`tiltshift decode <file> <offset> <format>`** — display command only; reads `~/.config/tiltshift/opcodes/<format>.toml`; never feeds back into discovery  ✓ done
+- [x] **`tiltshift opcodes add/list`** — install and list grammar files; validates TOML, copies to config dir  ✓ done
 
 ## Hypothesis engine
 
