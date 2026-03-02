@@ -1737,6 +1737,11 @@ fn obfuscate_one(path: &PathBuf, corpus: &corpus::Corpus, force: bool) -> anyhow
     // file headers.
     const MIN_INTERIOR_MAGIC_LEN: usize = 4;
 
+    // Collect valid patterns paired with their corpus entry index so we can
+    // resolve names and lengths after the Aho-Corasick pass.
+    let mut patterns: Vec<Vec<u8>> = Vec::new();
+    let mut pattern_meta: Vec<(String, usize)> = Vec::new(); // (name, magic_len)
+
     for entry in &corpus.formats {
         let Ok(magic) = entry.magic_bytes() else {
             continue;
@@ -1744,14 +1749,26 @@ fn obfuscate_one(path: &PathBuf, corpus: &corpus::Corpus, force: bool) -> anyhow
         if magic.is_empty() {
             continue;
         }
-        for offset in search::find_all(data, &magic) {
-            if offset > 0 && magic.len() < MIN_INTERIOR_MAGIC_LEN {
+        let len = magic.len();
+        patterns.push(magic);
+        pattern_meta.push((entry.name.clone(), len));
+    }
+
+    if !patterns.is_empty() {
+        // Single O(n + patterns + matches) pass over the file.
+        let ac = aho_corasick::AhoCorasick::new(&patterns)
+            .map_err(|e| anyhow::anyhow!("aho-corasick build error: {e}"))?;
+
+        for mat in ac.find_iter(data) {
+            let offset = mat.start();
+            let (name, magic_len) = &pattern_meta[mat.pattern().as_usize()];
+            if offset > 0 && *magic_len < MIN_INTERIOR_MAGIC_LEN {
                 continue; // too short to be reliable away from offset 0
             }
-            for b in buf[offset..offset + magic.len()].iter_mut() {
+            for b in buf[offset..offset + magic_len].iter_mut() {
                 *b = 0x00;
             }
-            zeroed.push((offset, entry.name.clone(), magic.len()));
+            zeroed.push((offset, name.clone(), *magic_len));
         }
     }
 
