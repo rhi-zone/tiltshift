@@ -40,18 +40,19 @@
 - [x] Packed field detector (nibble-level independent variation) (DESIGN: Bit-level signals)  ✓ done (`d4d1108`)
 - [ ] **Bytecode stream detector** — sequential-parse signals for opcode-driven formats; fundamentally different from position-independent signals; see design notes below
 
-## Bytecode / sequential-parse signals
+## Bytecode grammar discovery
 
-<!-- Bytecode breaks all existing signal assumptions: you cannot analyze a byte window in isolation
-     because operand count and width are a function of the opcode byte.  Requires sequential walk
-     from a known entry point. -->
+<!-- Full design in DESIGN.md § Bytecode grammar discovery.
+     Laws: no format knowledge in signal; self-consistency oracle only;
+     grammar files are outputs not inputs. Must derive WASM/pyc/JVM/x86
+     from first principles or the tool has failed. -->
 
-- [ ] **Opcode table format** — `data/opcodes/<format>.toml`: opcode → operand description (fixed bytes, leb128, modrm, etc.); analogous to `data/magic.toml`; start with simple VMs (Python .pyc, JVM, WASM) before x86
-- [ ] **Coverage probe** (`signals/bytecode.rs`) — try to decode from each candidate entry point using an opcode table; measure what fraction of bytes decode as valid instructions before hitting unknown opcode; emit `BytecodeStream { format, decode_coverage, instruction_count, invalid_opcode_rate }` — analogous to `compress::scan_compress_probe` but stateful
-- [ ] **Jump target consistency** — after decode, verify every branch/jump target lands on a decoded instruction boundary; strongest available validity check; boosts confidence when satisfied
-- [ ] **Entry point discovery** — MagicBytes signal (ELF `.text`, `.pyc` magic, WASM `\0asm`) hands off candidate start offsets; bytecode scanner takes offset + opcode table and walks forward
-- [ ] **`tiltshift decode <file> <offset> <format>`** — decode and print instructions from a given offset using a named opcode table
-- [ ] **`tiltshift opcodes add <format> <file>`** — register a new opcode table
+- [ ] **Phase 1 — fixed-width scan** (`signals/bytecode.rs`) — try W∈{1,2,3,4,8}; measure entropy separation between opcode positions (0,W,2W,…) and operand positions; emit `BytecodeStream { fixed_width: Some(W), decode_coverage, … }` when score exceeds threshold; handles Python .pyc 3.6+ (W=2), simple VMs, RISC
+- [ ] **Phase 2 — variable-width bootstrap** — from candidate entry point, greedily decode with empty grammar; for each unknown opcode try widths 0–4, pick the one that extends the decode furthest; iterate until coverage stops improving (≤3 passes typical); fills `opcode_widths` in the signal
+- [ ] **Phase 3 — jump target validation** — after decode, count decoded operand values that land on instruction boundaries; ratio is `jump_validity`; strong confirmation when high; see DESIGN.md for confidence formula
+- [ ] **`BytecodeStream` signal kind** — `{ entry_point, decode_coverage, jump_validity, instruction_count, fixed_width, opcode_widths }`; minimum to emit: confidence ≥ 0.45 AND coverage ≥ 0.60 AND count ≥ 16
+- [ ] **`tiltshift decode <file> <offset> <format>`** — display command only; reads `data/opcodes/<format>.toml`; never feeds back into discovery
+- [ ] **`tiltshift opcodes add/list`** — register and list grammar files; grammar files are human-written outputs of verified discovery
 
 ## Hypothesis engine
 
