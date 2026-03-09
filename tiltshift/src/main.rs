@@ -3260,7 +3260,16 @@ fn cmd_cluster(
             }
 
             // Slow path: extract signals, compute features, persist lightweight cache.
-            let sigs = signals::extract_all(data, block_size, &corpus);
+            // Cap the sample to the first 4 MB so large files (e.g. 180 MB bundles)
+            // don't spend minutes in compress.rs / bytecode.rs — the feature vector
+            // is a summary statistic and a prefix sample is accurate enough.
+            const CLUSTER_SAMPLE_BYTES: usize = 4 * 1024 * 1024;
+            let sample = if data.len() > CLUSTER_SAMPLE_BYTES {
+                &data[..CLUSTER_SAMPLE_BYTES]
+            } else {
+                data
+            };
+            let sigs = signals::extract_all(sample, block_size, &corpus);
             let feat = cluster::extract_features(&sigs);
             cluster::save_feature_cache(path, file_size, &feat);
 
@@ -3269,6 +3278,16 @@ fn cmd_cluster(
         .collect::<anyhow::Result<_>>()?;
 
     let feature_matrix: Vec<Vec<f32>> = entries.iter().map(|(_, f)| f.clone()).collect();
+
+    // HDBSCAN panics if n < min_cluster_size in the parallel implementation.
+    if feature_matrix.len() < min_cluster_size {
+        anyhow::bail!(
+            "need at least {} files to cluster (got {}); try --min-cluster-size {}",
+            min_cluster_size,
+            feature_matrix.len(),
+            feature_matrix.len() / 2 + 1,
+        );
+    }
 
     let hp = HdbscanHyperParams::builder()
         .min_cluster_size(min_cluster_size)
