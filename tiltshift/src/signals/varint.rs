@@ -49,16 +49,6 @@ fn decode_leb128_u(data: &[u8], pos: usize) -> Option<(u64, usize)> {
 }
 
 fn scan_leb128(data: &[u8], out: &mut Vec<Signal>) {
-    // Fast exit: in compressed/encrypted data, accidental LEB128 runs vastly
-    // outnumber genuine ones.  Empirically: DEFLATE ≈ 50% high bytes, LZW
-    // ≈ 38%, real protobuf/wasm ≈ 15–25%.  Skip at > 35% to catch both.
-    if data.len() >= 256 {
-        let high = data.iter().filter(|&&b| b >= 0x80).count();
-        if high * 20 > data.len() * 7 {
-            return;
-        }
-    }
-
     let mut i = 0;
     while i < data.len() {
         // Only start a run at a continuation byte (MSB=1) — first byte of a

@@ -67,6 +67,22 @@ pub fn build(signals: &[Signal], file_size: usize) -> PartialSchema {
         }
     }
 
+    // Compress-stream suppression — scale down pattern-matching hypotheses
+    // (VarInt/LEB128 and TlvSequence) when the file is already-compressed or
+    // encrypted.  The suppression factor is derived continuously from the
+    // compression ratio: a ratio near 1.0 means zlib found no structure to
+    // exploit, so any apparent LEB128/TLV patterns are almost certainly noise.
+    // Signals with specific byte content (strings, magic, chunks) are not
+    // affected — a real string is a real string regardless of context.
+    let csf = compressed_stream_factor(signals);
+    if csf < 1.0 {
+        for h in &mut schema.hypotheses {
+            if h.signals.iter().any(compress_stream_sensitive) {
+                h.confidence *= csf;
+            }
+        }
+    }
+
     // Sort: file-wide hypothesis first, then by confidence descending.
     schema.hypotheses.sort_by(|a, b| {
         let a_fw = a.region.offset == 0 && a.region.len == file_size;
@@ -82,6 +98,40 @@ pub fn build(signals: &[Signal], file_size: usize) -> PartialSchema {
     });
 
     schema
+}
+
+// ── Compressed-stream suppression ────────────────────────────────────────────
+
+/// Confidence multiplier for pattern-seeking signals in already-compressed data.
+///
+/// Derived from the `CompressionProbe` ratio: below 0.85 the data is
+/// compressible (structured), so no penalty.  At 1.0 (incompressible) the
+/// factor reaches 0.0 — pattern signals are almost certainly noise.  The
+/// transition is linear so there is no cliff edge.
+fn compressed_stream_factor(signals: &[Signal]) -> f64 {
+    let Some(ratio) = signals.iter().find_map(|s| match &s.kind {
+        SignalKind::CompressionProbe { ratio, .. } => Some(*ratio),
+        _ => None,
+    }) else {
+        return 1.0; // no probe → no suppression
+    };
+    const KNEE: f64 = 0.85; // below here: data is compressible → no penalty
+    if ratio <= KNEE {
+        1.0
+    } else {
+        // Linear from 1.0 at KNEE down to 0.0 at ratio=1.0.
+        1.0 - (ratio - KNEE) / (1.0 - KNEE)
+    }
+}
+
+/// Returns true for signals whose interpretation depends on local byte
+/// structure and is therefore unreliable inside compressed streams.
+fn compress_stream_sensitive(sig: &Signal) -> bool {
+    match &sig.kind {
+        SignalKind::VarInt { encoding, .. } => encoding == "leb128-unsigned",
+        SignalKind::TlvSequence { .. } => true,
+        _ => false,
+    }
 }
 
 // ── Direct conversion ────────────────────────────────────────────────────────
