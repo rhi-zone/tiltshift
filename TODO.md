@@ -88,17 +88,16 @@ Real-world validation on 608 obfuscated corpus files revealed the following rema
 
 ### Fixed in 369da66
 - 2-byte magic false positives at non-zero offsets (ff f3, 78 9c, 4d 5a etc.)
-- LEB128 false positives in compressed data (> 40% high bytes → skip)
-- TLV false positives in compressed data (same gate)
 - RepeatedPattern deduplication by stride (adjacent phase offsets → keep best)
+
+### Fixed architecturally (moved to hypothesis.rs)
+- LEB128 and TLV false positives in compressed streams — suppression factor now derived from `CompressionProbe.ratio` in hypothesis.rs rather than per-extractor byte-density gates. Linear scale: ratio ≤ 0.85 → no penalty; ratio = 1.0 → confidence × 0.0. Extractors emit signals unconditionally; hypothesis engine applies context.
 
 ### Remaining issues (descending priority)
 - **Short null-terminated strings in large uncompressed images**: 4-7 byte accidental runs are common in uncompressed pixel data (PNG with no-compression IDAT). Expected ~21000 false positives in a 21MB uncompressed image. Possible fixes: raise MIN_STRING_BYTES from 4 to 8, or add local-context entropy check (skip if surrounding byte entropy too high).
 - **3-byte magic patterns at non-zero offsets in large files**: "FWS" (SWF), "MP+" (Musepack), "ID3", "JPEG XR" each get multiple hits in 21MB uncompressed image. Each 3-byte pattern has ~1.3 expected false hits per 21MB; seeing more (~5-10) suggests the null-byte distribution in images boosts some patterns. Consider lowering confidence for 3-byte hits at non-zero offsets (0.95 → 0.75) so they sort below stronger signals.
 - **Offset graph with very few edges (2 nodes, 1 edge) at 50% confidence**: too weak to be useful. Minimum edge count should probably be 3+, or confidence for 1-edge graphs should be ≤ 0.40.
 - **NumericValue power-of-two signals in sub-region LAYOUT**: generates many low-confidence signals in recursive descent. Already at 40% confidence, but still appears in top-20 for small files with many power-of-two pixel values.
-
-- **LZW-compressed data (e.g. GIF) false positive → "Protobuf-like"**: LZW output sits at ~38% high bytes — just under the 40% suppression gate — so LEB128 fires on it. LZW's sub-block framing (1-byte size + N data bytes, until 0x00) matches u8+u8 TLV, and the Protobuf compound forms. Two format-agnostic fixes: (a) lower the suppression gate from 40% to 35% (empirically: LZW ≈ 38%, DEFLATE ≈ 50%, real protobuf ≈ 15–25% — a 35% threshold separates compressed-stream noise from genuine LEB128); (b) require TLV type diversity proportional to record count before emitting the Protobuf-like compound — LZW sub-block labels cluster in a very small set across thousands of records, whereas real protobuf field numbers diversify quickly.
 
 ### Positive findings (working well)
 - PNG detection via "IHDR" null-terminated string at offset 0x0c (stripped magic → still identified)
