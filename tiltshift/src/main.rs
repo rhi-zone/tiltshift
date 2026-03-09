@@ -1,8 +1,9 @@
 use clap::{Parser, Subcommand};
+use hdbscan::{Hdbscan, HdbscanHyperParams};
 use rayon::prelude::*;
 use std::path::PathBuf;
 use tiltshift::{
-    constraint, corpus, hypothesis,
+    cluster, constraint, corpus, hypothesis,
     loader::MappedFile,
     opcodes, probe, search, session, signals,
     signals::{chunk::sequence_label, tlv::tlv_label},
@@ -256,6 +257,29 @@ enum Command {
         /// Human-readable label for this region.
         label: String,
     },
+
+    /// Group files into clusters based on signal similarity (unsupervised HDBSCAN).
+    ///
+    /// Extracts a 10-dimensional feature vector from each file's signals and runs
+    /// HDBSCAN to discover natural groupings without specifying the number of classes.
+    /// Files that don't fit any cluster are reported as noise.
+    ///
+    /// Examples:
+    ///   tiltshift cluster *.unk
+    ///   tiltshift cluster --min-cluster-size 3 ~/corpus/*.unk
+    Cluster {
+        /// Files to cluster.
+        files: Vec<PathBuf>,
+        /// Minimum number of files required to form a cluster (default: 5).
+        #[arg(long, default_value_t = 5)]
+        min_cluster_size: usize,
+        /// Entropy block size in bytes for signal extraction (default: 256).
+        #[arg(long, default_value_t = 256)]
+        block_size: usize,
+        /// Show feature vector for each file.
+        #[arg(long)]
+        features: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -461,6 +485,12 @@ fn main() -> anyhow::Result<()> {
             OpcodesAction::Add { name, file } => cmd_opcodes_add(&name, &file),
             OpcodesAction::List => cmd_opcodes_list(),
         },
+        Command::Cluster {
+            files,
+            min_cluster_size,
+            block_size,
+            features,
+        } => cmd_cluster(&files, min_cluster_size, block_size, features),
     }
 }
 
@@ -3193,6 +3223,130 @@ fn cmd_opcodes_list() -> anyhow::Result<()> {
             .map(|d| d.display().to_string())
             .unwrap_or_else(|| "(unknown)".to_string())
     );
+    Ok(())
+}
+
+// ── cluster ───────────────────────────────────────────────────────────────────
+
+fn cmd_cluster(
+    paths: &[PathBuf],
+    min_cluster_size: usize,
+    block_size: usize,
+    show_features: bool,
+) -> anyhow::Result<()> {
+    if paths.is_empty() {
+        anyhow::bail!("no files provided");
+    }
+    if paths.len() < 2 {
+        anyhow::bail!("need at least 2 files to cluster");
+    }
+
+    let corpus = corpus::load();
+
+    // Extract feature vector for each file, using a lightweight feature cache.
+    // We deliberately avoid loading the full signal session cache here — for
+    // large uncompressed files it can be hundreds of MB, causing OOM when many
+    // files are processed together.
+    let entries: Vec<(PathBuf, Vec<f32>)> = paths
+        .iter()
+        .map(|path| {
+            let mapped = MappedFile::open(path)?;
+            let data = mapped.bytes();
+            let file_size = data.len() as u64;
+
+            // Fast path: feature cache hit.
+            if let Some(feat) = cluster::load_feature_cache(path, file_size) {
+                return Ok((path.clone(), feat));
+            }
+
+            // Slow path: extract signals, compute features, persist lightweight cache.
+            let sigs = signals::extract_all(data, block_size, &corpus);
+            let feat = cluster::extract_features(&sigs);
+            cluster::save_feature_cache(path, file_size, &feat);
+
+            Ok((path.clone(), feat))
+        })
+        .collect::<anyhow::Result<_>>()?;
+
+    let feature_matrix: Vec<Vec<f32>> = entries.iter().map(|(_, f)| f.clone()).collect();
+
+    let hp = HdbscanHyperParams::builder()
+        .min_cluster_size(min_cluster_size)
+        .build();
+    let labels = Hdbscan::new(&feature_matrix, hp)
+        .cluster_par()
+        .map_err(|e| anyhow::anyhow!("HDBSCAN failed: {e:?}"))?;
+
+    // Group files by cluster label.
+    let mut clusters: std::collections::BTreeMap<i32, Vec<&PathBuf>> =
+        std::collections::BTreeMap::new();
+    for (i, label) in labels.iter().enumerate() {
+        clusters.entry(*label).or_default().push(&entries[i].0);
+    }
+
+    let bar = "═".repeat(60);
+    println!("{bar}");
+    println!("  tiltshift cluster  ({} files)", paths.len());
+    println!("{bar}");
+
+    // Noise first, then numbered clusters.
+    if let Some(noise) = clusters.get(&-1) {
+        println!();
+        println!("  NOISE  ({} file(s) — no cluster)", noise.len());
+        for p in noise {
+            println!("    {}", p.display());
+        }
+    }
+
+    let cluster_labels: Vec<i32> = clusters.keys().filter(|&&k| k >= 0).copied().collect();
+    for label in &cluster_labels {
+        let members = &clusters[label];
+
+        // Compute mean feature vector for the cluster.
+        let dim = cluster::FEATURE_NAMES.len();
+        let mut mean = vec![0.0f32; dim];
+        for p in members.iter() {
+            let feat = entries.iter().find(|(pp, _)| pp == *p).map(|(_, f)| f);
+            if let Some(f) = feat {
+                for (d, v) in f.iter().enumerate() {
+                    mean[d] += v;
+                }
+            }
+        }
+        for v in &mut mean {
+            *v /= members.len() as f32;
+        }
+
+        println!();
+        println!(
+            "  CLUSTER {}  ({} file(s)) — {}",
+            label,
+            members.len(),
+            cluster::describe_cluster(&mean)
+        );
+        for p in members {
+            println!("    {}", p.display());
+            if show_features {
+                let feat = entries.iter().find(|(pp, _)| pp == *p).map(|(_, f)| f);
+                if let Some(f) = feat {
+                    let fstr: Vec<String> = cluster::FEATURE_NAMES
+                        .iter()
+                        .zip(f.iter())
+                        .map(|(name, v)| format!("{name}={v:.2}"))
+                        .collect();
+                    println!("      [{}]", fstr.join("  "));
+                }
+            }
+        }
+    }
+
+    println!();
+    println!(
+        "  {} cluster(s), {} noise",
+        cluster_labels.len(),
+        clusters.get(&-1).map_or(0, |v| v.len())
+    );
+
     Ok(())
 }
 

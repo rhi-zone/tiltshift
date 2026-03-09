@@ -1,3 +1,4 @@
+pub mod cluster;
 pub mod constraint;
 pub mod corpus;
 pub mod hypothesis;
