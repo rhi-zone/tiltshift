@@ -4,6 +4,10 @@ use crate::types::{Region, Signal, SignalKind};
 const LEB128_MIN_MULTIBYTE: usize = 5;
 /// Minimum consecutive UTF-8 multi-byte codepoints (no ASCII break) to emit.
 const UTF8_MIN_CODEPOINTS: usize = 5;
+/// Maximum VarInt signals to emit.  Files saturated with high bytes (compressed
+/// data, 16-bit pixel samples) can produce hundreds of thousands of LEB128 runs;
+/// cap to keep session caches manageable.
+const MAX_VARINT_SIGNALS: usize = 500;
 
 /// Scan for variable-length integer encoding patterns.
 ///
@@ -49,8 +53,12 @@ fn decode_leb128_u(data: &[u8], pos: usize) -> Option<(u64, usize)> {
 }
 
 fn scan_leb128(data: &[u8], out: &mut Vec<Signal>) {
+    let start_len = out.len();
     let mut i = 0;
     while i < data.len() {
+        if out.len() - start_len >= MAX_VARINT_SIGNALS {
+            break;
+        }
         // Only start a run at a continuation byte (MSB=1) — first byte of a
         // multi-byte LEB128 value.  Single-byte values (< 0x80) are skipped.
         if data[i] & 0x80 == 0 {
@@ -144,8 +152,12 @@ fn decode_utf8_multibyte(data: &[u8], pos: usize) -> Option<usize> {
 }
 
 fn scan_utf8_multibyte(data: &[u8], out: &mut Vec<Signal>) {
+    let start_len = out.len();
     let mut i = 0;
     while i < data.len() {
+        if out.len() - start_len >= MAX_VARINT_SIGNALS {
+            break;
+        }
         let run_start = i;
         let mut count = 0usize;
 

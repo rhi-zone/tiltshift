@@ -21,3 +21,4 @@ memmap2 = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+hdbscan = { version = "0.12", features = ["parallel"] }

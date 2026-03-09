@@ -25,6 +25,12 @@ pub fn shannon_entropy(data: &[u8]) -> f64 {
         .sum()
 }
 
+/// Maximum entropy block signals.  Files larger than MAX_BLOCKS * block_size
+/// are sampled: the first half of the budget covers the file head, the second
+/// half covers the tail.  This keeps the session cache bounded while preserving
+/// the entropy transitions most relevant to structure detection.
+const MAX_ENTROPY_BLOCKS: usize = 2000;
+
 /// Sliding-window entropy map.  Returns one `Signal` per block.
 ///
 /// DESIGN rationale: transitions between regions (changes in entropy) are more
@@ -33,8 +39,18 @@ pub fn shannon_entropy(data: &[u8]) -> f64 {
 pub fn entropy_map(data: &[u8], block_size: usize, stride: usize) -> Vec<Signal> {
     assert!(block_size > 0 && stride > 0);
 
+    let total_blocks = data.len().div_ceil(stride);
+    // If the file fits in the budget, use every block; otherwise sample head + tail.
+    let sample_stride = if total_blocks <= MAX_ENTROPY_BLOCKS {
+        1usize
+    } else {
+        // Emit one block every N to stay within budget.
+        total_blocks.div_ceil(MAX_ENTROPY_BLOCKS)
+    };
+
     let mut signals = Vec::new();
     let mut offset = 0;
+    let mut block_idx = 0usize;
 
     while offset < data.len() {
         let end = (offset + block_size).min(data.len());
@@ -56,13 +72,16 @@ pub fn entropy_map(data: &[u8], block_size: usize, stride: usize) -> Vec<Signal>
             EntropyClass::Compressed => 0.80,
             EntropyClass::Mixed => 0.65,
         };
-        signals.push(Signal::new(
-            Region::new(offset, end - offset),
-            SignalKind::EntropyBlock { entropy: e, class },
-            confidence,
-            reason,
-        ));
+        if block_idx.is_multiple_of(sample_stride) {
+            signals.push(Signal::new(
+                Region::new(offset, end - offset),
+                SignalKind::EntropyBlock { entropy: e, class },
+                confidence,
+                reason,
+            ));
+        }
         offset += stride;
+        block_idx += 1;
     }
 
     signals

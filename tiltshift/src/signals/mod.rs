@@ -23,7 +23,10 @@ use crate::types::Signal;
 /// Run all signal extractors over `data` and return every signal found,
 /// in offset order.
 pub fn extract_all(data: &[u8], entropy_block_size: usize, corpus: &Corpus) -> Vec<Signal> {
-    let stride = (entropy_block_size / 4).max(1);
+    // Non-overlapping blocks: stride == block_size.  The old stride=block/4
+    // gave 4× coverage and ballooned session caches into hundreds of MB for
+    // large files (e.g. 24 MB → 378 K EntropyBlock signals at stride=64).
+    let stride = entropy_block_size;
 
     // Each extractor is independent — run them in parallel via rayon.
     let extractors: Vec<Box<dyn Fn() -> Vec<Signal> + Send + Sync>> = vec![
