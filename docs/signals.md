@@ -1,6 +1,6 @@
 # Signal Reference
 
-tiltshift runs 13 signal extractors simultaneously when you call `analyze`. Each signal carries a region (offset + length), confidence (0.0–1.0), and a human-readable reason.
+tiltshift runs 16 signal extractors simultaneously when you call `analyze`. Each signal carries a region (offset + length), confidence (0.0–1.0), and a human-readable reason.
 
 ## Statistical signals
 
@@ -101,6 +101,42 @@ Two encodings:
 - **utf8-multibyte** — 5 or more consecutive valid non-ASCII UTF-8 codepoints. Confidence 0.70–0.88.
 
 Reports the encoding type, value count, bytes consumed, and average byte width per value.
+
+### PackedField
+
+Detects bytes where the high and low nibbles vary independently — the hallmark of packed two-field encodings: BCD dates, 4-bit type/subtype pairs, MPEG-2 flag bytes, TCP DSCP+ECN, etc.
+
+Filters out constant data (too low nibble entropy), random/encrypted data (too high nibble entropy), and ASCII text (the ASCII range produces heavily unbalanced nibble entropy — high nibble ≈ 2.0 bits, low nibble ≈ 3.9 bits — which fails the balance check).
+
+Reports whether the data is BCD-encoded (≥ 90% of bytes have both nibbles in 0–9), the nibble entropy values, and the mutual information between high and low nibble. Confidence 0.55–0.92 (BCD detection raises confidence).
+
+One result per file; requires at least 64 bytes.
+
+## Pointer signals
+
+### OffsetGraph
+
+Scans all fixed-width integer values (u16le, u16be, u32le, u32be, u64le, u64be) and builds a graph where a value is an edge if it points to a different valid file offset. Finds the largest connected component — a cluster of values that mutually reference each other is strong evidence of a pointer table, relocation section, or linked-list chain.
+
+Reports the integer width and endianness, number of nodes and edges in the largest component, and a density metric. Skips u16 scans for files larger than 32 KB (at that size nearly every u16 value is in-bounds and the signal becomes noise).
+
+Minimum thresholds: 5 nodes for u16, 4 nodes for u32, 2 nodes for u64.
+
+## Behavioral signals
+
+### BytecodeStream
+
+Format-agnostic bytecode detection based on self-consistency, not format knowledge. No hardcoded opcode tables.
+
+**Phase 1 — fixed-width scan**: For each candidate instruction width (1, 2, 3, 4, 8 bytes), measures the entropy separation between opcode positions and operand positions. High separation (>0.5 bits) suggests a fixed-width instruction encoding.
+
+**Phase 2 — variable-width bootstrap**: Greedy walk from the start of the region, inferring operand widths for each opcode by choosing the width that yields the longest continued decode run.
+
+**Phase 3 — jump target validation**: Collects small operand values and checks what fraction land on instruction boundaries.
+
+**Frequency analysis**: Checks top-5 opcode dominance — real instruction sets are heavily skewed toward a handful of common instructions (load, push, return, etc.). Uniformly distributed opcodes after greedy decoding indicate random data, not bytecode. Minimum top-5 dominance: 20%.
+
+Reports decode coverage, instruction count, distinct opcode count, top-5 dominance, and the detected encoding (fixed-width with the stride, or variable-width). Requires at least 32 bytes and 16 decoded instructions. Confidence 0.45–0.90.
 
 ## Confidence scores
 

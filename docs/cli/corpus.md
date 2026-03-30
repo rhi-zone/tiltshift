@@ -1,49 +1,97 @@
 # corpus
 
-Extract a structural model from N binary files of the same format.
+Build a structural consensus model from multiple files of the same format, or save one as a named format.
 
-`tiltshift corpus` runs signal extraction on each file, finds signals that appear at the same offset across all (or a configurable fraction of) files, and builds a consensus hypothesis from those shared structural markers. Files that diverge from the consensus are reported separately.
+`corpus` has three subcommands: `build` (one-shot consensus), `add` (save a named format model), and `list` (inspect saved formats).
 
-Useful for reverse-engineering unknown binary formats when you have multiple samples.
+## corpus build
 
-## Usage
+Extract a structural model from two or more binary files and print the consensus.
+
+Finds signals present at the same offset across all (or a configurable fraction of) files. Files that diverge from the consensus are reported separately. Useful for reverse-engineering unknown binary formats when you have multiple samples.
+
+### Usage
 
 ```
-tiltshift corpus [OPTIONS] <FILES>...
+tiltshift corpus build [OPTIONS] <FILES>...
 ```
 
-## Arguments
+### Arguments
 
 | Argument | Description |
 |----------|-------------|
 | `<FILES>...` | Two or more binary files to analyse |
 
-## Options
+### Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--threshold <F>` | `1.0` | Minimum fraction of files a signal must appear in (0.0–1.0). Use `0.8` to allow one file in five to be missing a signal. |
 | `--block-size <N>` | `256` | Entropy block size in bytes |
+| `--min-confidence <F>` | `0.0` | Only show signals and hypotheses at or above this confidence (0.0–1.0) |
 | `--json` | off | Output JSON instead of human-readable text |
 
-## Examples
-
-### Basic usage
+### Examples
 
 ```sh
-tiltshift corpus sample1.bin sample2.bin sample3.bin
+tiltshift corpus build sample1.bin sample2.bin sample3.bin
 ```
 
-### Allow one outlier in five files
-
 ```sh
-tiltshift corpus --threshold 0.8 *.bin
+tiltshift corpus build --threshold 0.8 *.bin
 ```
 
-### JSON output (for scripting or agent consumption)
+```sh
+tiltshift corpus build --json a.bin b.bin | jq .hypotheses
+```
+
+## corpus add
+
+Build a consensus model from reference files and save it as a named format.
+
+The model is stored at `~/.config/tiltshift/formats/<format>.toml` and can be inspected with `corpus list`. Use `tiltshift anomaly` to check new files against a saved model.
+
+### Usage
+
+```
+tiltshift corpus add [OPTIONS] <FORMAT> <FILES>...
+```
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `<FORMAT>` | Short name for this format (e.g. `png`, `wav`, `elf`) |
+| `<FILES>...` | Two or more representative files |
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--threshold <F>` | `1.0` | Minimum fraction of files a signal must appear in (0.0–1.0) |
+| `--block-size <N>` | `256` | Entropy block size in bytes |
+| `--min-confidence <F>` | `0.0` | Only include signals at or above this confidence (0.0–1.0) |
+
+### Examples
 
 ```sh
-tiltshift corpus --json a.bin b.bin | jq .hypotheses
+tiltshift corpus add png ref1.png ref2.png ref3.png
+```
+
+```sh
+tiltshift corpus add wav --threshold 0.8 sample1.wav sample2.wav
+```
+
+## corpus list
+
+List all saved format models.
+
+Shows all named formats stored at `~/.config/tiltshift/formats/`.
+
+### Usage
+
+```
+tiltshift corpus list
 ```
 
 ## Output (text)
@@ -108,5 +156,6 @@ PER-FILE DIVERGENCES
 ## See also
 
 - [`analyze`](./analyze) — single-file analysis
+- [`anomaly`](./anomaly) — check a file against a saved model
 - [`diff`](./diff) — structural delta between two files
 - [`annotate`](./annotate) — tag known regions in a file
