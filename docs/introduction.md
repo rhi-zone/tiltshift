@@ -20,7 +20,7 @@ tiltshift operates at the **structural** layer, not the semantic layer:
 | Anomaly detection | Cryptographic analysis |
 | Embedded format detection | Steganography solving |
 
-It runs 13 signal extractors simultaneously and reports what it finds, with confidence scores and reasoning. Useful for unknown formats, validating known ones, detecting anomalies, and building format corpora.
+It runs 16 signal extractors simultaneously and reports what it finds, with confidence scores and reasoning. Useful for unknown formats, validating known ones, detecting anomalies, and building format corpora.
 
 ## Installation
 

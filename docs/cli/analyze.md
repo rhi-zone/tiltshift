@@ -20,6 +20,8 @@ tiltshift analyze <file> [--depth <N>] [--block-size <N>] [--json]
 |---|---|---|
 | `--depth <N>` | `1` | Maximum recursion depth for sub-region analysis (0 = none) |
 | `--block-size <N>` | `256` | Entropy block size in bytes |
+| `--min-confidence <F>` | `0.0` | Only show signals and hypotheses at or above this confidence (0.0–1.0) |
+| `--verbose` | off | Show signal reasoning for all signal types and all alternative hypotheses |
 | `--json` | off | Output JSON instead of human-readable text |
 
 ## Output sections
@@ -126,6 +128,9 @@ One section per signal type that produced results, listed after the layout:
 - **VARIABLE-LENGTH INTEGERS** — LEB128 and UTF-8 multibyte runs
 - **COMPRESSION PROBE** — zlib ratio
 - **ENTROPY MAP** — per-block Shannon entropy with a visual bar
+- **OFFSET GRAPH** — pointer/relocation tables detected via in-bounds integer clustering
+- **PACKED FIELD** — bytes with independently-varying nibbles (BCD, 4-bit sub-fields)
+- **BYTECODE STREAM** — format-agnostic bytecode detection via decode self-consistency
 
 Followed by a **SUMMARY** count for each signal type.
 

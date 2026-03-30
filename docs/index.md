@@ -15,7 +15,7 @@ hero:
 
 features:
   - title: Signal Analysis
-    details: 13 signal extractors covering statistical, structural, numeric, and bit-level patterns. Each signal is annotated with confidence and reason.
+    details: 16 signal extractors covering statistical, structural, numeric, bit-level, pointer, and bytecode patterns. Each signal is annotated with confidence and reason.
   - title: Iterative Refinement
     details: Each confirmed structure becomes a constraint that narrows remaining unknowns. Analyze → hypothesize → refine → repeat.
   - title: Agent-Friendly Output
