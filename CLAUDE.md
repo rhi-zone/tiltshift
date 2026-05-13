@@ -42,40 +42,43 @@ cargo clippy       # Lint
 cd docs && bun dev # Local docs
 ```
 
-## Core Rules
+If a tool appears missing, you are outside `nix develop`. Do not assume the tool is unavailable to the project.
 
-**Note things down immediately — no deferral:**
-- Problems, tech debt, issues → TODO.md now, in the same response
-- Design decisions, key insights → docs/ or CLAUDE.md
-- Future/deferred scope → TODO.md **before** writing any code, not after
-- **Every observed problem → TODO.md. No exceptions.** Code comments and conversation mentions are not tracked items. If you write a TODO comment in source, the next action is to open TODO.md and write the entry.
+## Context Is The Only Scarce Resource
 
-**Conversation is not memory.** Anything said in chat evaporates at session end. If it implies future behavior change, write it to CLAUDE.md immediately — or it will not happen.
+Every byte that enters the main session stays in the main session for its entire lifetime. File contents, command output, search results, page text — once read, it lingers in cache and shapes every downstream token. There is no "just looking."
 
-**Warning — these phrases mean something needs to be written down right now:**
-- "I won't do X again" / "I'll remember to..." / "I've learned that..."
-- "Next time I'll..." / "From now on I'll..."
-- Any acknowledgement of a recurring error without a corresponding CLAUDE.md edit
+**All exploration runs in subagents.** Investigations, audits, deep dives, surveys, "let me check," "let me find" — if the purpose of a tool sequence is to find out something you don't yet know, it runs in a subagent. Renaming the activity does not change what it is. The subagent returns a distilled summary; the raw output stays in the subagent.
 
-**Triggers:** User corrects you, 2+ failed attempts, "aha" moment, framework quirk discovered → document before proceeding.
+The main session holds only the durable artifacts you are producing: the edit, the commit, the doc update.
 
-**When the user corrects you:** Ask what rule would have prevented this, and write it before proceeding. **"The rule exists, I just didn't follow it" is never the diagnosis** — a rule that doesn't prevent the failure it describes is incomplete; fix the rule, not your behavior.
+**Subagent model tiers:**
+- Opus — design, architecture, any subagent that itself spawns subagents.
+- Sonnet — implementation, mechanical multi-file work, default exploration.
 
-**Corrections are documentation lag, not model failure.** When the same mistake recurs, the fix is writing the invariant down — not repeating the correction. Every correction that doesn't produce a CLAUDE.md edit will happen again. Exception: during active design, corrections are the work itself — don't prematurely document a design that hasn't settled yet.
+Use Opus for exploration only when the search requires architectural judgment, not lookup.
 
-**Something unexpected is a signal, not noise.** Surprising output, anomalous numbers, files containing what they shouldn't — stop and ask why before continuing. Don't accept anomalies and move on.
+## Durability
 
-**Do the work properly.** Don't leave workarounds or hacks undocumented. When asked to analyze X, actually read X — don't synthesize from conversation.
+Subagent reports, mid-session realizations, "I'll remember this" — none of these outlast the session. Anything worth keeping goes into CLAUDE.md, code, docs, or a commit. If it isn't written down, it is gone.
 
-## Design Principles
+**Commit completed work immediately.** After tests pass, commit. After each phase of a multi-phase plan, commit. Uncommitted work is lost work, and accumulated uncommitted phases lose isolation as well.
 
-**Unify, don't multiply.** One interface for multiple cases > separate interfaces. Plugin systems > hardcoded switches.
+**Docs change in the same commit as the code.** New pages enter the sidebar in that commit. There is no follow-up.
 
-**Simplicity over cleverness.** HashMap > inventory crate. OnceLock > lazy_static. Functions > traits until you need the trait. Use ecosystem tooling over hand-rolling.
+Problems, tech debt, issues → TODO.md now, in the same response. Future/deferred scope → TODO.md **before** writing any code. If you write a TODO comment in source, the next action is to open TODO.md and write the entry. Code comments and conversation mentions are not tracked items.
 
-**Explicit over implicit.** Log when skipping. Show what's at stake before refusing.
+## Authenticity
 
-**Separate niche from shared.** Don't bloat shared config with feature-specific data. Use separate files for specialized data.
+When asked to analyze X, read X. Do not synthesize from conversation memory, prior summaries, or what the file probably says. Claims must correspond to evidence produced this session.
+
+**Something unexpected is a signal.** Surprising output, anomalous numbers, a file containing what it shouldn't — stop and find out why. Do not accept the anomaly and proceed.
+
+## Discipline
+
+Corrections from the user are conversation, not material for new rules. A single correction does not warrant a CLAUDE.md edit. Rules are added when a failure mode is observed repeatedly and the rule names the failure it prevents.
+
+Do not announce actions ("I will now…"). Act.
 
 ## Workflow
 
@@ -83,57 +86,33 @@ cd docs && bun dev # Local docs
 ```bash
 cargo clippy --all-targets --all-features -- -D warnings && cargo test -q
 ```
-After editing multiple files, run the full check once — not after each edit. Formatting is handled automatically by the pre-commit hook (`cargo fmt`).
+After editing multiple files, run the full check once — not after each edit. `cargo fmt` runs in the pre-commit hook.
+
+**Prefer `cargo test -q`** over `cargo test` — quiet mode only prints failures, significantly reducing output noise and context usage.
 
 **Bigram tables must be heap-allocated** (`vec![0u32; 65536]`) — stack allocation (256 KB) overflows in debug builds.
 
 **Clippy enforces:** `.is_multiple_of()` not `% 2 != 0`; `.is_power_of_two()` not `v & (v-1) == 0`; `.is_none_or(…)` / `.is_some_and(…)` not `Option::map_or(true/false, …)`.
 
-**Prefer `cargo test -q`** over `cargo test` — quiet mode only prints failures, significantly reducing output noise and context usage.
-
 **When making the same change across multiple crates**, edit all files first, then build once.
 
 **Minimize file churn.** When editing a file, read it once, plan all changes, and apply them in one pass. Avoid read-edit-build-fail-read-fix cycles by thinking through the complete change before starting.
 
-**Always commit completed work.** After tests pass, commit immediately — don't wait to be asked. When a plan has multiple phases, commit after each phase passes. Do not accumulate changes across phases. Uncommitted work is lost work.
-
-**`normalize view` is available** for structural outlines of files and directories:
+`normalize view` gives structural outlines without pulling full file bodies into context:
 ```bash
-~/git/rhizone/normalize/target/debug/normalize view <file>    # outline with line numbers
-~/git/rhizone/normalize/target/debug/normalize view <dir>     # directory structure
+~/git/rhizone/normalize/target/debug/normalize view <file>
+~/git/rhizone/normalize/target/debug/normalize view <dir>
 ```
-
-## Context Management
-
-**All exploration goes in subagents.** Any tool call whose purpose is "find out what's here" — grep, find, broad reads, surveys, audits — runs in a subagent. Raw exploratory output in the main context is active context poisoning: it lingers in cache, shapes downstream reasoning, can't be unsent. The subagent returns a distilled summary; the noise stays in the subagent.
-
-Inline tool use in the main context is reserved for:
-- Reading a known file at a known path
-- Edits/writes you're committing to
-- A single targeted lookup whose result you'll act on immediately
-
-If you find yourself running a second grep to refine the first, you should have spawned a subagent.
 
 ## Commit Convention
 
-Use conventional commits: `type(scope): message`
+Conventional commits: `type(scope): message`
 
-Types:
-- `feat` - New feature
-- `fix` - Bug fix
-- `refactor` - Code change that neither fixes a bug nor adds a feature
-- `docs` - Documentation only
-- `chore` - Maintenance (deps, CI, etc.)
-- `test` - Adding or updating tests
+Types: `feat`, `fix`, `refactor`, `docs`, `chore`, `test`. Scope is optional but recommended for multi-crate repos.
 
-Scope is optional but recommended for multi-crate repos.
+## Hard Constraints
 
-## Negative Constraints
-
-Do not:
-- Announce actions ("I will now...") - just do them
-- Leave work uncommitted
-- Use interactive git commands (`git add -p`, `git add -i`, `git rebase -i`) — these block on stdin and hang in non-interactive shells; stage files by name instead
-- Use path dependencies in Cargo.toml - causes clippy to stash changes across repos
-- Use `--no-verify` - fix the issue or fix the hook
-- Assume tools are missing - check if `nix develop` is available for the right environment
+- No `--no-verify`. Fix the issue or fix the hook.
+- No path dependencies in `Cargo.toml` — they couple repos and break independent publishing.
+- No interactive git (`git add -p`, `git add -i`, `git rebase -i`) — these block on stdin and hang.
+- No assuming a tool is missing without checking `nix develop`.
