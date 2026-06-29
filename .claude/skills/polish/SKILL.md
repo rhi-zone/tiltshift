@@ -1,4 +1,5 @@
 ---
+name: polish
 description: Interactive codebase polish loop. Run parallel audit agents across chosen lenses, synthesize findings, and persist state in POLISH.md for incremental improvement across sessions.
 argument-hint: [lens-preset]
 allowed-tools: [Read, Glob, Grep, Bash, Agent]
