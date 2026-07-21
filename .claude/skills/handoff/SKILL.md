@@ -45,7 +45,11 @@ This ensures the next session sees the trust boundary explicitly, even if it doe
    - Update existing items if context has changed
    - Keep items the session didn't touch
    - Ensure the trust-boundary line is present at the top of the open-threads section
-4. Enter plan mode only now, when presenting this plan is the ONLY remaining step — every write and commit must already be done. Subagents spawned from inside plan mode can only write their own plan files, so nothing further can be delegated after this point. Invoke the `EnterPlanMode` tool with a **short** plan that communicates direction. **Critical:** the plan must mark itself as pre-research — a starting hypothesis, NOT a verified directive. The next session hasn't done the investigation; the previous session's intent should inform, not command.
+4. Commit the TODO.md update.
+5. **Determine mode from the user's wording:**
+   - If the user's phrasing indicates a **continuation handoff** (e.g. "/handoff", "hand off", "pass to next session", "leave context for the next one") — proceed to step 6.
+   - If the user's phrasing indicates a **clean exit** (e.g. "ready to exit?", "done", "wrapping up", "stopping here") — stop. The TODO.md update is the deliverable; do not enter plan mode.
+6. Enter plan mode only now, when presenting this plan is the ONLY remaining step — every write and commit must already be done. Subagents spawned from inside plan mode can only write their own plan files, so nothing further can be delegated after this point. Invoke the `EnterPlanMode` tool with a **short** plan that communicates direction. **Critical:** the plan must mark itself as pre-research — a starting hypothesis, NOT a verified directive. The next session hasn't done the investigation; the previous session's intent should inform, not command.
 
    Use suggestive, deferential language:
    - "suggests continuing with..." not "do..."
@@ -66,9 +70,9 @@ This ensures the next session sees the trust boundary explicitly, even if it doe
    - If you find yourself writing more than a few lines, you're leaking task content — move it to TODO.md instead
    - The next session enters plan mode only for its own eventual handoff — the handoff plan is context, not a substitute for verifying the direction
 
-5. When the user accepts or rejects the plan, the `ExitPlanMode` tool fires — that's what lets them approve, redirect, or start a fresh session.
+7. When the user accepts or rejects the plan, the `ExitPlanMode` tool fires — that's what lets them approve, redirect, or start a fresh session.
 
 The division of labor:
 - **TODO.md** carries task content as advisory context (diffable, verifiable)
-- **The plan** carries direction/intent as an explicitly unverified starting hypothesis
+- **The plan** carries direction/intent as an explicitly unverified starting hypothesis (continuation mode only)
 - Neither should duplicate the other, and neither should be trusted without verification
