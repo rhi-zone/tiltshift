@@ -29,16 +29,18 @@ cd docs && bun dev # Local docs
 - Future/deferred scope → TODO.md **before** writing any code, not after
 - **Every observed problem → TODO.md. No exceptions.** Code comments and conversation mentions are not tracked items. If you write a TODO comment in source, the next action is to open TODO.md and write the entry.
 
-**Conversation is not memory.** Anything said in chat evaporates at session end. If it implies future behavior change, write it to CLAUDE.md or a memory file immediately — or it will not happen.
+**Conversation is not memory.** Anything said in chat evaporates at session end. If it implies future behavior change, write it to CLAUDE.md immediately — or it will not happen.
 
 **Warning — these phrases mean something needs to be written down right now:**
 - "I won't do X again" / "I'll remember to..." / "I've learned that..."
 - "Next time I'll..." / "From now on I'll..."
-- Any acknowledgement of a recurring error without a corresponding CLAUDE.md or memory edit
+- Any acknowledgement of a recurring error without a corresponding CLAUDE.md edit
 
 **Triggers:** User corrects you, 2+ failed attempts, "aha" moment, framework quirk discovered → document before proceeding.
 
 **When the user corrects you:** Ask what rule would have prevented this, and write it before proceeding. **"The rule exists, I just didn't follow it" is never the diagnosis** — a rule that doesn't prevent the failure it describes is incomplete; fix the rule, not your behavior.
+
+**Corrections are documentation lag, not model failure.** When the same mistake recurs, the fix is writing the invariant down — not repeating the correction. Every correction that doesn't produce a CLAUDE.md edit will happen again. Exception: during active design, corrections are the work itself — don't prematurely document a design that hasn't settled yet.
 
 **Something unexpected is a signal, not noise.** Surprising output, anomalous numbers, files containing what they shouldn't — stop and ask why before continuing. Don't accept anomalies and move on.
 
@@ -58,9 +60,11 @@ cd docs && bun dev # Local docs
 
 **Batch cargo commands** to minimize round-trips:
 ```bash
-cargo clippy --all-targets --all-features -- -D warnings && cargo test
+cargo clippy --all-targets --all-features -- -D warnings && cargo test -q
 ```
 After editing multiple files, run the full check once — not after each edit. Formatting is handled automatically by the pre-commit hook (`cargo fmt`).
+
+**Prefer `cargo test -q`** over `cargo test` — quiet mode only prints failures, significantly reducing output noise and context usage.
 
 **When making the same change across multiple crates**, edit all files first, then build once.
 
@@ -92,11 +96,13 @@ Use plan mode as a handoff mechanism when:
 - The session has drifted from its original purpose
 - Context has accumulated enough that a fresh start would help
 
-**For handoffs:** enter plan mode, write a short plan pointing at TODO.md, and ExitPlanMode. **Do NOT investigate first** — the session is context-heavy and about to be discarded. The fresh session investigates after approval.
+**For handoffs:** enter plan mode, write a plan containing only: next tasks, blocked/pending items, and what was done this session (only if it directly affects what comes next). Nothing else — no commands, no build steps, no context summaries. Those belong in CLAUDE.md or TODO.md. The next session reads both fresh. **Do NOT investigate first** — the session is context-heavy and about to be discarded.
 
 **For mid-session planning** on a different topic: investigating inside plan mode is fine — context isn't being thrown away.
 
-Before the handoff plan, update TODO.md and memory files with anything worth preserving.
+**TODO.md is the lossless record.** Flush any new items to TODO.md before the handoff. Anything worth preserving belongs in CLAUDE.md or TODO.md — not in memory files.
+
+**Initiate a handoff after a significant mid-session correction.** When a correction happens after substantial wrong-path work, the wrong reasoning is still in context and keeps pulling. Writing down the invariant and starting fresh beats continuing with poisoned context — the next session loads the invariant from turn 1 before any wrong reasoning exists.
 
 ## Commit Convention
 
@@ -115,6 +121,7 @@ Scope is optional but recommended for multi-crate repos.
 ## Negative Constraints
 
 Do not:
+- Use Claude Code's auto-memory system (`~/.claude/projects/.*./memory/`) — it is unversioned, invisible to the user, and can't be diffed or backed up. Write behavioral changes directly to CLAUDE.md instead
 - Announce actions ("I will now...") - just do them
 - Leave work uncommitted
 - Use interactive git commands (`git add -p`, `git add -i`, `git rebase -i`) — these block on stdin and hang in non-interactive shells; stage files by name instead
