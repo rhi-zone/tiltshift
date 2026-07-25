@@ -14,6 +14,8 @@ export default withMermaid(
 
     base: '/tiltshift/',
 
+    srcExclude: ['**/CLAUDE.md'],
+
     head: [
       ['link', { rel: 'icon', type: 'image/svg+xml', href: '/tiltshift/logo.svg' }],
     ],

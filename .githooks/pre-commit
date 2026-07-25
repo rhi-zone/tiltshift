@@ -2,7 +2,7 @@
 set -e
 
 echo "Running cargo fmt..."
-staged=$(git diff --cached --name-only)
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
 cargo fmt --all
 if [ -n "$staged" ]; then
   echo "$staged" | xargs git add
