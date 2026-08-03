@@ -44,6 +44,10 @@ cd docs && bun dev # Local docs
 
 If a tool appears missing, you are outside `nix develop`. Do not assume the tool is unavailable to the project.
 
+After creating a new worktree, run `scripts/setup-worktree-target.sh` (mac/linux) or
+`scripts/setup-worktree-target.ps1` (windows) once to share the build cache across
+worktrees.
+
 ## Workflow
 
 **Batch cargo commands** to minimize round-trips:
